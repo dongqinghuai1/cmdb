@@ -1,0 +1,16 @@
+Django>=5.1
+djangorestframework>=3.15
+django-filter>=24.3
+drf-spectacular>=0.27
+djangorestframework-simplejwt>=5.3
+celery[redis]>=5.4
+redis>=5.0
+psycopg[binary]>=3.2
+cryptography>=43.0
+openpyxl>=3.1
+requests>=2.32
+gunicorn>=23.0
+# 采集引擎（容器内 Python 3.12 运行；Windows 本机若装失败不阻塞 web 开发）
+netmiko>=4.4
+pysnmp>=7.0
+minio>=7.2

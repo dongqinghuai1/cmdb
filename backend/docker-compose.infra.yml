@@ -1,0 +1,54 @@
+name: nops-infra
+
+networks:
+  nops-net:
+    external: true
+    name: nops-net
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: nops-postgres
+    environment:
+      POSTGRES_DB: nops
+      POSTGRES_USER: nops
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nops}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./docker/init-extensions.sql:/docker-entrypoint-initdb.d/00-extensions.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nops"]
+      interval: 5s
+      retries: 12
+    networks: [nops-net]
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.102.0
+    container_name: nops-vm
+    volumes:
+      - vm_data:/victoria-metrics-data
+    command: ["-retentionPeriod=13mo"]
+    networks: [nops-net]
+
+  redis:
+    image: redis:7-alpine
+    container_name: nops-redis
+    networks: [nops-net]
+
+  minio:
+    image: minio/minio
+    container_name: nops-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio_data:/data
+    networks: [nops-net]
+
+volumes:
+  pg_data: {}
+  vm_data: {}
+  minio_data: {}
