@@ -17,6 +17,7 @@
 | 文档 | 用途 |
 |---|---|
 | [docs/HANDOVER.md](docs/HANDOVER.md) | **智能体交接文档**：当前进度、待办、坑与教训、验证脚本 |
+| [docs/DEVICE_ONBOARD.md](docs/DEVICE_ONBOARD.md) | **真实设备接入**：SNMP/Ping 在线监控 5 分钟接入指南 |
 | [docs/DEPLOY.md](docs/DEPLOY.md) | **部署运维手册**：从零安装、配置、升级、备份 |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | **开发规范**：模块地图、数据模型、编码纪律 |
 | [PRD-智能运维CMDB平台.md](PRD-智能运维CMDB平台.md) | 产品需求 V0.5（15 项决策记录） |

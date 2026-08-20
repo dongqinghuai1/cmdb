@@ -15,6 +15,7 @@
       </el-select>
       <el-button type="primary" @click="load(1)">查询</el-button>
       <el-button @click="openCreate">新增设备</el-button>
+      <el-button type="warning" @click="collectAll">立即采集</el-button>
       <el-button @click="exportXlsx">导出 Excel</el-button>
       <el-upload :show-file-list="false" :http-request="importXlsx" accept=".xlsx"
                  style="display:inline-block">
@@ -75,6 +76,21 @@
         </el-select>
       </el-form-item>
       <el-form-item label="起始U"><el-input-number v-model="form.rack_start_u" :min="1" :max="50" /></el-form-item>
+      <el-divider content-position="left">采集配置（在线/离线检测）</el-divider>
+      <el-form-item label="采集驱动">
+        <el-select v-model="form.driver_type" clearable placeholder="留空=通用SNMP(snmp_std)">
+          <el-option v-for="d in DRIVERS" :key="d.v" :label="d.v + '（' + d.n + '）'" :value="d.v" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="SNMP凭据">
+        <el-select v-model="form.credential_id" clearable filterable placeholder="不选则 community=public">
+          <el-option v-for="c in credentials" :key="c.id" :label="c.name + '（' + c.cred_type + '）'" :value="c.id" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="启用采集">
+        <el-switch v-model="form.collect_enabled" />
+        <span style="color:#909399;font-size:12px;margin-left:8px">每5分钟自动 SNMP + Ping</span>
+      </el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="dlg=false">取消</el-button>
@@ -92,8 +108,16 @@ const q = ref(""); const f = reactive({ region: null, model: null, online_status
 const rows = ref([]); const count = ref(0); const page = ref(1);
 const models = ref([]); const regions = ref([]); const sites = ref([]); const rackOptions = ref([]);
 const dlg = ref(false);
+const DRIVERS = [
+  { v: "snmp_std", n: "通用SNMP" }, { v: "h3c_comware", n: "H3C交换机" },
+  { v: "cisco_ios", n: "Cisco IOS" }, { v: "cisco_asa", n: "Cisco防火墙" },
+  { v: "cisco_wlc_3504", n: "WLC 3504" }, { v: "cisco_wlc_9800", n: "WLC 9800" },
+  { v: "fortigate", n: "飞塔" }, { v: "sangfor_ac", n: "深信服" },
+];
 const form = reactive({ id: null, name: "", model: null, vendor: "", sn: "", manage_ip: "",
-                        site: null, rack: null, rack_start_u: 1 });
+                        site: null, rack: null, rack_start_u: 1,
+                        driver_type: null, credential_id: null, collect_enabled: true });
+const credentials = ref([]);
 
 const load = async (p = 1) => {
   page.value = p;
@@ -102,12 +126,14 @@ const load = async (p = 1) => {
 };
 onMounted(async () => {
   await load();
-  const [m, rg, st] = await Promise.all([
+  const [m, rg, st, cr] = await Promise.all([
     api.get("/cmdb/models/", { params: { page_size: 100 } }),
     api.get("/dcim/regions/", { params: { page_size: 100 } }),
     api.get("/dcim/sites/", { params: { page_size: 100 } }),
+    api.get("/system/credentials/", { params: { page_size: 100 } }),
   ]);
   models.value = m.results || []; regions.value = rg.results || []; sites.value = st.results || [];
+  credentials.value = cr.results || [];
 });
 
 const onSite = async (sid) => {
@@ -134,7 +160,8 @@ const save = async () => {
 
 const openCreate = () => {
   Object.assign(form, { id: null, name: "", model: null, vendor: "", sn: "", manage_ip: "",
-                        site: null, rack: null, rack_start_u: 1 });
+                        site: null, rack: null, rack_start_u: 1,
+                        driver_type: null, credential_id: null, collect_enabled: true });
   rackOptions.value = [];
   dlg.value = true;
 };
@@ -143,6 +170,8 @@ const edit = async (row) => {  Object.assign(form, {
     id: row.id, name: row.name, model: row.model, vendor: row.vendor, sn: row.sn,
     manage_ip: row.manage_ip, site: row.site, rack: row.rack || null,
     rack_start_u: row.rack_start_u || 1,
+    driver_type: row.driver_type || null, credential_id: row.credential_id || null,
+    collect_enabled: row.collect_enabled !== false,
   });
   if (row.site) await onSite(row.site);
   if (row.rack) {
@@ -150,6 +179,13 @@ const edit = async (row) => {  Object.assign(form, {
     rackOptions.value = r.results || [];
   }
   dlg.value = true;
+};
+
+const collectAll = async () => {
+  const r = await api.post("/monitor/collect/", {});
+  ElMessage.success(r.queued === "all" ? "已下发全量采集（后台执行中，稍后刷新查看在线状态）"
+                                       : "已下发 " + r.queued + " 台采集");
+  setTimeout(() => load(page.value), 8000);
 };
 
 const exportXlsx = () => { window.open("/api/v1/cmdb/devices/export-excel/", "_blank"); };

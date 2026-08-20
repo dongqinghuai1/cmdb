@@ -13,4 +13,5 @@ gunicorn>=23.0
 # 采集引擎（容器内 Python 3.12 运行；Windows 本机若装失败不阻塞 web 开发）
 netmiko>=4.4
 pysnmp>=7.0
+ping3>=4.0
 minio>=7.2

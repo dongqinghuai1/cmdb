@@ -12,6 +12,8 @@ app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
 
 app.conf.beat_schedule = {
+    # 设备采集（SNMP+ICMP 在线判定）：每 5 分钟
+    "monitor-collect-all": {"task": "monitor.collect_all", "schedule": 300.0},
     # 告警评估（指标阈值/离线状态/日志关键字）：每 60 秒
     "alert-evaluate-rules": {"task": "alert.evaluate_rules", "schedule": 60.0},
     # NCM 全量配置备份：每日 02:30

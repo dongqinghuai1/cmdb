@@ -1,10 +1,26 @@
 from rest_framework import serializers, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.monitor.models import CollectorNode, LogRecord
 from common.permissions import RbacPermission
 from django.utils import timezone
+
+
+class CollectTriggerView(APIView):
+    """POST /monitor/collect/ 手动触发采集。body: {device_ids?: [..]} 不传=全部启用设备。"""
+    permission_classes = [RbacPermission]
+
+    def post(self, request):
+        from apps.monitor.collector import collect_batch
+        ids = request.data.get("device_ids")
+        if ids:
+            r = collect_batch.delay([int(i) for i in ids])
+            return Response({"queued": len(ids), "task": r.id})
+        from apps.monitor.collector import collect_all
+        r = collect_all.delay()
+        return Response({"queued": "all", "task": r.id})
 
 
 class CollectorNodeSerializer(serializers.ModelSerializer):

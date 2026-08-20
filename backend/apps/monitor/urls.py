@@ -7,4 +7,7 @@ router = DefaultRouter()
 router.register("collectors", views.CollectorNodeViewSet)
 router.register("logs", views.LogRecordViewSet, basename="log")
 
-urlpatterns = [path("", include(router.urls))]
+urlpatterns = [
+    path("collect/", views.CollectTriggerView.as_view(), name="collect-trigger"),
+    path("", include(router.urls)),
+]
