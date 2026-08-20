@@ -29,7 +29,7 @@ services:
     container_name: nops-vm
     volumes:
       - vm_data:/victoria-metrics-data
-    command: ["-retentionPeriod=13mo"]
+    command: ["-retentionPeriod=390d"]
     networks: [nops-net]
 
   redis:

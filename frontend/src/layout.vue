@@ -6,6 +6,7 @@
                active-text-color="#fff">
         <el-menu-item index="/dashboard"><el-icon><Monitor /></el-icon>工作台</el-menu-item>
         <el-menu-item index="/dcim"><el-icon><OfficeBuilding /></el-icon>机房管理</el-menu-item>
+        <el-menu-item index="/topo"><el-icon><Connection /></el-icon>拓扑管理</el-menu-item>
         <el-menu-item index="/devices"><el-icon><Cpu /></el-icon>设备台账</el-menu-item>
         <el-menu-item index="/alerts"><el-icon><Bell /></el-icon>告警中心</el-menu-item>
         <el-menu-item index="/inspects"><el-icon><List /></el-icon>巡检中心</el-menu-item>
@@ -24,7 +25,7 @@
 
 <script setup>
 import { onMounted, ref } from "vue";
-import { Bell, Cpu, List, Monitor, OfficeBuilding, Setting } from "@element-plus/icons-vue";
+import { Bell, Connection, Cpu, List, Monitor, OfficeBuilding, Setting } from "@element-plus/icons-vue";
 import api from "./api";
 
 const user = ref({});

@@ -15,14 +15,9 @@
         <el-button size="small" type="primary" @click="save">保存布局</el-button>
       </template>
       <el-button size="small" @click="load">刷新</el-button>
-      <span style="color:#c0c4cc;font-size:12px">BUILD=fp6</span>
+      <span style="color:#c0c4cc;font-size:12px">BUILD=fp7</span>
       <span style="color:#909399;font-size:12px" v-if="edit && pal">点击画布放置「{{ typeName(pal) }}」</span>
     </div>
-
-    <!-- 拖拽实时调试徽标：卡住时请把这行数值发我 -->
-    <div v-if="dragBadge" class="dbg">拖拽中 {{ dragBadge.name }}: x={{ dragBadge.x }} y={{ dragBadge.y }}
-      w={{ dragBadge.w }} h={{ dragBadge.h }} | 画布 {{ len }}×{{ wid }}m |
-      y可到[0 ~ {{ (wid - dragBadge.h).toFixed(1) }}] x可到[0 ~ {{ (len - dragBadge.w).toFixed(1) }}]</div>
 
     <div style="display:flex;gap:10px;flex:1;min-height:0">
       <!-- 画布 -->
@@ -38,7 +33,6 @@
             </span>
             <span v-if="edit" class="rz" title="拖动调整大小"
                   @pointerdown.stop.prevent="onRzDown($event, o)"></span>
-            <span v-if="edit" class="coord">({{ o.x }},{{ o.y }}) {{ o.w }}×{{ o.h }}</span>
           </div>
         </div>
         <el-empty v-if="!objects.length && !edit" description="尚无布局，打开「编辑模式」DIY 机房平面图" :image-size="60" />
@@ -189,7 +183,6 @@ const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(hi, lo));
 
 /* window 级监听 + 增量计算：按下记录起点，移动按 Δ 更新；无论指针去哪都不丢、不联动其他元素。 */
 let dragCtx = null;  // {o, sx, sy, ox, oy, ow, oh, move}
-const dragBadge = ref(null);
 const onWinMove = (ev) => {
   if (!dragCtx) return;
   const { o, sx, sy, ox, oy, ow, oh } = dragCtx;
@@ -200,11 +193,9 @@ const onWinMove = (ev) => {
     o.w = snap(clamp(ow + (ev.clientX - sx) / SCALE, 0.2, len.value - o.x));
     o.h = snap(clamp(oh + (ev.clientY - sy) / SCALE, 0.2, wid.value - o.y));
   }
-  dragBadge.value = { name: o.name || typeName(o.obj_type), x: o.x, y: o.y, w: o.w, h: o.h };
 };
 const onWinUp = () => {
   dragCtx = null;
-  dragBadge.value = null;
   window.removeEventListener("pointermove", onWinMove);
   window.removeEventListener("pointerup", onWinUp);
   document.body.style.cursor = "";
@@ -271,13 +262,8 @@ const save = async () => {
 .rack-u { position: absolute; bottom: 0; right: 2px; font-size: 10px; color: #333; z-index: 1; }
 .rz { position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px;
       background: #409eff; border-radius: 3px 0 4px 0; cursor: nwse-resize; z-index: 2; }
-.coord { position: absolute; top: -16px; left: 0; background: rgba(48, 49, 51, 0.85); color: #fff;
-         font-size: 10px; padding: 0 4px; border-radius: 3px; white-space: nowrap; z-index: 4;
-         font-family: Consolas, monospace; }
 .props { width: 210px; border: 1px solid #dcdfe6; border-radius: 6px; padding: 10px;
          background: #fff; height: fit-content; flex-shrink: 0; }
-.dbg { background: #303133; color: #ffd049; font-size: 12px; padding: 4px 10px;
-       border-radius: 4px; width: fit-content; font-family: Consolas, monospace; }
 .hbar { display: flex; align-items: center; gap: 10px; padding: 4px 0; cursor: pointer; font-size: 13px; }
 .hbar:hover { color: #409eff; }
 .htrack { flex: 1; height: 12px; background: #f0f2f5; border-radius: 6px; overflow: hidden; }
