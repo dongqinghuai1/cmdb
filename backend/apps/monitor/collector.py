@@ -50,12 +50,12 @@ def _load_device(device_id):
 
 
 def _snmp_get(host, community, oid):
-    """单值 GET；失败返回 None。"""
+    """单值 GET；失败返回 None。mpModel=1 即 SNMPv2c。"""
     if not HAS_PYSNMP:
         return None
     try:
         for err, _, _, varbinds in nextCmd(
-                SnmpEngine(), CommunityData(community, mpModel=0),
+                SnmpEngine(), CommunityData(community, mpModel=1),
                 UdpTransportTarget((host, 161), timeout=3, retries=1),
                 ContextData(), ObjectType(ObjectIdentity(oid)), lexicographicMode=False):
             if err:

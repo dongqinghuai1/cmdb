@@ -44,10 +44,14 @@ class BaseModelViewSet(viewsets.ModelViewSet):
                     after=self._snapshot(serializer), source_ip=self._ip())
 
     def perform_update(self, serializer):
-        before = self._snapshot(serializer)
+        # 修复：before 取数据库旧值，而非 validated_data（两者相同导致审计失真）
+        instance = serializer.instance
+        before = {f.name: getattr(instance, f.name, None) for f in instance._meta.fields
+                  if f.name not in ("created_at", "updated_at")} if instance else {}
         obj = serializer.save()
+        after = {k: v for k, v in serializer.validated_data.items()}
         write_audit(self.request.user, "update", obj.__class__.__name__, obj.pk,
-                    before=before, after=self._snapshot(serializer), source_ip=self._ip())
+                    before=before, after=after, source_ip=self._ip())
 
     def perform_destroy(self, instance):
         from django.db.models import ProtectedError

@@ -5,71 +5,89 @@ networks:
     external: true
     name: nops-net
 
+x-app-env: &app-env
+  env_file: .env
+  environment: &app-env-vars
+    DJANGO_DEBUG: "0"
+    POSTGRES_HOST: postgres
+    CELERY_BROKER_URL: redis://redis:6379/0
+    CELERY_RESULT_BACKEND: redis://redis:6379/1
+    VM_URL: http://victoriametrics:8428
+    MINIO_ENDPOINT: minio:9000
+  restart: unless-stopped
+  networks: [nops-net]
+
 services:
   api:
     build: .
     container_name: nops-api
-    command: gunicorn config.wsgi:application -b 0.0.0.0:8000 -w 4 --timeout 120
-    env_file: .env
-    environment:
-      DJANGO_DEBUG: "0"
-      POSTGRES_HOST: postgres
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
-      VM_URL: http://victoriametrics:8428
-      MINIO_ENDPOINT: minio:9000
+    command: gunicorn config.wsgi:application -b 0.0.0.0:8000 -w 4 --timeout 120 --access-logfile - --error-logfile -
+    <<: *app-env
     ports:
-      - "8000:8000"
-    networks: [nops-net]
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/api/v1/auth/login/',data=b'{}')\" 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
 
   worker:
     build: .
     container_name: nops-worker
-    command: celery -A config worker -l info -Q nops -c 8
-    env_file: .env
-    environment:
-      DJANGO_DEBUG: "0"
-      POSTGRES_HOST: postgres
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
-      VM_URL: http://victoriametrics:8428
-      MINIO_ENDPOINT: minio:9000
-    networks: [nops-net]
+    command: celery -A config worker -l info -Q nops,ssh -c 4
+    <<: *app-env
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A config inspect ping -d celery@$${HOSTNAME} --timeout 10"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
 
   beat:
     build: .
     container_name: nops-beat
     command: celery -A config beat -l info
-    env_file: .env
-    environment:
-      DJANGO_DEBUG: "0"
-      POSTGRES_HOST: postgres
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
-      VM_URL: http://victoriametrics:8428
-      MINIO_ENDPOINT: minio:9000
-    networks: [nops-net]
+    <<: *app-env
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "2" }
 
   syslog:
     build: .
     container_name: nops-syslog
     command: python services/syslog_server.py
-    env_file: .env
-    environment:
-      DJANGO_DEBUG: "0"
-      POSTGRES_HOST: postgres
-      CELERY_BROKER_URL: redis://redis:6379/0
-      VM_URL: http://victoriametrics:8428
+    <<: *app-env
     ports:
       - "514:514/udp"
-    networks: [nops-net]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket;s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.sendto(b'<14>test',('127.0.0.1',514));print('ok')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
 
   web:
     build:
       context: ../frontend
     container_name: nops-web
+    restart: unless-stopped
     ports:
       - "8090:80"
     depends_on:
       - api
     networks: [nops-net]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:80/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "2" }

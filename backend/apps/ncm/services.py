@@ -88,16 +88,13 @@ def fetch_via_ssh(device_id):
 
 
 def run_baseline(rule_ids=None):
-    """must_present/must_absent regex per line against latest backup of each device."""
     from apps.ncm.models import BaselineCheckResult, BaselineRule, ConfigBackup
     results = []
     rules = BaselineRule.objects.filter(pk__in=rule_ids) if rule_ids else BaselineRule.objects.all()
-    backups = {b.device_id: b for b in ConfigBackup.objects.order_by("device_id", "-created_at")}
-    seen = set()
+    # 修复：setdefault 首见即最新（order_by -created_at）
+    backups = {}
     for b in ConfigBackup.objects.order_by("-created_at"):
-        if b.device_id not in backups and b.device_id not in seen:
-            backups[b.device_id] = b
-            seen.add(b.device_id)
+        backups.setdefault(b.device_id, b)
     for rule in rules:
         for dev_id, backup in backups.items():
             hit_lines = [l for l in (backup.content or "").splitlines() if re.search(rule.pattern, l)]

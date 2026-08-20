@@ -1,26 +1,39 @@
-"""Celery 应用与周期任务调度（beat）。"""
+"""Celery 应用与调度：独立队列 + 硬超时 + 自动恢复/升级/自监控/日志清理。"""
 import os
 
-from celery import Celery
-from celery.schedules import crontab
-
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
-os.environ.setdefault("DJANGO_SECRET_KEY", "dev-insecure-key")
+
+from celery import Celery  # noqa: E402
+from celery.schedules import crontab  # noqa: E402
 
 app = Celery("nops")
 app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
 
-app.conf.beat_schedule = {
-    # 设备采集（SNMP+ICMP 在线判定）：每 5 分钟
-    "monitor-collect-all": {"task": "monitor.collect_all", "schedule": 300.0},
-    # 告警评估（指标阈值/离线状态/日志关键字）：每 60 秒
-    "alert-evaluate-rules": {"task": "alert.evaluate_rules", "schedule": 60.0},
-    # NCM 全量配置备份：每日 02:30
-    "ncm-backup-all": {"task": "ncm.backup_all", "schedule": crontab(hour=2, minute=30)},
+# ---- 队列：ssh 长任务独立，防 SSH 黑洞卡死全部 worker ----
+app.conf.task_routes = {
+    "ncm.*": {"queue": "ssh"},
+    "monitor.collect_*": {"queue": "nops"},
+    "alert.*": {"queue": "nops"},
+    "inspect.*": {"queue": "nops"},
 }
 
+# ---- 超时与可靠性 ----
+app.conf.task_soft_time_limit = 120
+app.conf.task_time_limit = 180
+app.conf.task_acks_late = True
+app.conf.worker_prefetch_multiplier = 1
+app.conf.task_default_retry_delay = 10
+app.conf.task_max_retries = 3
 
-def register_beat(name, task, schedule, **kwargs):
-    """各 App 动态注册入口（追加后需重启 beat 生效）。"""
-    app.conf.beat_schedule[name] = {"task": task, "schedule": schedule, **kwargs}
+app.conf.beat_schedule = {
+    "monitor-collect-all": {"task": "monitor.collect_all", "schedule": 300.0},
+    "alert-evaluate-rules": {"task": "alert.evaluate_rules", "schedule": 60.0},
+    "ncm-backup-all": {"task": "ncm.backup_all", "schedule": crontab(hour=2, minute=30)},
+    # 告警闭环：自动恢复 + 升级检查
+    "alert-auto-resolve": {"task": "alert.auto_resolve", "schedule": 120.0},
+    "alert-check-escalation": {"task": "alert.check_escalation", "schedule": 120.0},
+    # 平台自监控 + 日志清理
+    "platform-self-check": {"task": "monitor.self_check", "schedule": 300.0},
+    "log-cleanup": {"task": "monitor.log_cleanup", "schedule": crontab(hour=4, minute=0)},
+}

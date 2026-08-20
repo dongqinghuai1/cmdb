@@ -1,4 +1,5 @@
 """dcim 服务层：机柜 U 位视图 + 跨表冲突校验（ER D2：DB 不支持跨表 EXCLUDE，服务层统一校验）。"""
+from django.db import models
 from django.db.models import Q
 from django.utils import timezone
 
@@ -11,7 +12,8 @@ class RackService:
         """返回 [(start, end_exclusive)]：设备占用 + 有效预留。"""
         from apps.cmdb.models import Device  # cmdb 视图内调用；仅服务层允许
         ranges = []
-        dev_qs = Device.objects.filter(rack_id=rack_id, deleted_at__isnull=True)
+        dev_qs = Device.objects.filter(rack_id=rack_id, deleted_at__isnull=True,
+                                       rack_start_u__isnull=False)
         if exclude_device_id:
             dev_qs = dev_qs.exclude(pk=exclude_device_id)
         for d in dev_qs.values_list("rack_start_u", "rack_units"):
@@ -77,7 +79,7 @@ class RackService:
         for r in racks:
             dev = Device.objects.filter(rack=r, deleted_at__isnull=True)
             out.append({"id": r.id, "name": r.name, "site_id": r.site_id, "u_total": r.u_total,
-                        "used_u": dev.count(),
+                        "used_u": dev.aggregate(models.Sum("rack_units"))["rack_units__sum"] or 0,
                         "power_w": sum(d.get("rated_power_w") or 0 for d in dev.values("rated_power_w")),
                         "rated_power_w": r.rated_power_w})
         return out

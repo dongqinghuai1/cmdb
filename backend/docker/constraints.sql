@@ -40,5 +40,13 @@ CREATE INDEX IF NOT EXISTS device_sn_trgm ON cmdb_device USING gin (sn gin_trgm_
 CREATE INDEX IF NOT EXISTS device_hostname_trgm ON cmdb_device USING gin (hostname gin_trgm_ops) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS device_attrs_gin ON cmdb_device USING gin (attrs jsonb_path_ops) WHERE deleted_at IS NULL;
 
+-- 唯一性约束（专家评审 P1：防重复 IP/SN 设备导致 syslog/采集错配）
+CREATE UNIQUE INDEX IF NOT EXISTS device_sn_uq ON cmdb_device (sn) WHERE deleted_at IS NULL AND sn IS NOT NULL AND sn != '';
+CREATE UNIQUE INDEX IF NOT EXISTS device_manage_ip_uq ON cmdb_device (manage_ip) WHERE deleted_at IS NULL AND manage_ip IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS device_asset_no_uq ON cmdb_device (asset_no) WHERE deleted_at IS NULL AND asset_no IS NOT NULL AND asset_no != '';
+
+-- 平台自监控任务心跳指标
+-- (由 monitor.self_check 写入 VM: platform_heartbeat)
+
 -- 分区表说明（D12）：alert_login_event / monitor_logrecord / system_auditlog
 -- 一期为普通表+索引（数据量见 ER 第 7 章），分区转换在量级到位后经 pg_partman 迁移。
