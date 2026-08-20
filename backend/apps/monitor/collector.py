@@ -23,6 +23,13 @@ except Exception:  # pragma: no cover
 
 OID_SYSNAME = "1.3.6.1.2.1.1.5.0"
 OID_SYSDESCR = "1.3.6.1.2.1.1.1.0"
+OID_IF_DESCR = "1.3.6.1.2.1.31.1.1.1.1"
+OID_IF_OPER = "1.3.6.1.2.1.2.2.1.8"
+OID_IF_IN_OCT = "1.3.6.1.2.1.31.1.1.1.6"
+OID_IF_OUT_OCT = "1.3.6.1.2.1.31.1.1.1.10"
+OID_IF_IN_ERR = "1.3.6.1.2.1.2.2.1.14"
+OID_IF_OUT_ERR = "1.3.6.1.2.1.2.2.1.20"
+IF_OPER_MAP = {1: "up", 2: "down", 3: "testing", 4: "unknown", 5: "dormant", 6: "notPresent", 7: "lowerLayerDown"}
 
 DRIVER_MAP = {  # driver_type -> netmiko device_type（NCM SSH 备份用）
     "h3c_comware": "hp_comware", "cisco_asa": "cisco_asa",
@@ -84,6 +91,73 @@ def _resolve_community(cred_id, attrs):
     return (attrs or {}).get("_snmp_community", "public")
 
 
+def _snmp_walk(host, community, oid):
+    """返回 {suffix: str(value)} 字典。"""
+    if not HAS_PYSNMP:
+        return {}
+    out = {}
+    try:
+        for err, _, _, varbinds in nextCmd(
+                SnmpEngine(), CommunityData(community, mpModel=0),
+                UdpTransportTarget((host, 161), timeout=3, retries=1),
+                ContextData(), ObjectType(ObjectIdentity(oid)), lexicographicMode=False):
+            if err:
+                break
+            for vb in varbinds:
+                suffix = str(vb[0]).rsplit(".", 1)[-1]
+                out[suffix] = str(vb[1])
+    except Exception:
+        pass
+    return out
+
+
+def collect_interfaces(device_id, host, community):
+    """IF-MIB walk -> upsert device_interface + device_interface_stat。"""
+    from django.db import connection
+    descr = _snmp_walk(host, community, OID_IF_DESCR)
+    if not descr:
+        return 0
+    oper = _snmp_walk(host, community, OID_IF_OPER)
+    in_oct = _snmp_walk(host, community, OID_IF_IN_OCT)
+    out_oct = _snmp_walk(host, community, OID_IF_OUT_OCT)
+    in_err = _snmp_walk(host, community, OID_IF_IN_ERR)
+    out_err = _snmp_walk(host, community, OID_IF_OUT_ERR)
+
+    # 获取已有的接口映射 name -> id
+    with connection.cursor() as cur:
+        cur.execute("SELECT id, name FROM cmdb_deviceinterface WHERE device_id=%s", [device_id])
+        existing = {r[1]: r[0] for r in cur.fetchall()}
+
+    now = timezone.now()
+    count = 0
+    for suffix, name in descr.items():
+        if_idx = int(suffix)
+        name = name[:64]
+        if_id = existing.get(name)
+        if not if_id:
+            cur.execute(
+                "INSERT INTO cmdb_deviceinterface (device_id, name, if_index, oper_status, created_at, updated_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
+                [device_id, name, if_idx,
+                 IF_OPER_MAP.get(int(oper.get(suffix, 4)), "unknown"), now, now])
+            if_id = cur.fetchone()[0]
+        else:
+            cur.execute("UPDATE cmdb_deviceinterface SET oper_status=%s, if_index=%s, updated_at=%s WHERE id=%s",
+                        [IF_OPER_MAP.get(int(oper.get(suffix, 4)), "unknown"), if_idx, now, if_id])
+
+        # 计算速率（与上次采集的差值）
+        in_bps = int(in_oct.get(suffix, 0)) * 8
+        out_bps = int(out_oct.get(suffix, 0)) * 8
+        cur.execute(
+            "INSERT INTO cmdb_deviceinterfacestat (interface_id, in_bps, out_bps, in_errors_total, out_errors_total, updated_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT (interface_id) DO UPDATE SET in_bps=%s, out_bps=%s, in_errors_total=%s, out_errors_total=%s, updated_at=%s",
+            [if_id, in_bps, out_bps, int(in_err.get(suffix, 0)), int(out_err.get(suffix, 0)), now,
+             in_bps, out_bps, int(in_err.get(suffix, 0)), int(out_err.get(suffix, 0)), now])
+        count += 1
+    return count
+
+
 def _push_vm(device_id, driver_type, metrics):
     lines = [f'{k}{{device_id="{device_id}",driver_type="{driver_type}"}} {v}'
              for k, v in metrics.items()]
@@ -116,9 +190,11 @@ def collect_one(device_id) -> dict:
 
     sysname = _snmp_get(host, community, OID_SYSNAME)
     if sysname is not None:
+        iface_count = collect_interfaces(device_id, host, community)
         _set_status(device_id, "online", hostname=sysname[:120])
         _push_vm(device_id, driver, {"device_up": 1, "device_snmp_up": 1})
-        return {"device": device_id, "status": "online", "snmp": True, "ping": None}
+        return {"device": device_id, "status": "online", "snmp": True,
+                "ping": None, "interfaces": iface_count}
 
     alive = _icmp_ping(host)
     if alive:
