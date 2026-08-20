@@ -50,6 +50,20 @@ services:
       MINIO_ENDPOINT: minio:9000
     networks: [nops-net]
 
+  syslog:
+    build: .
+    container_name: nops-syslog
+    command: python services/syslog_server.py
+    env_file: .env
+    environment:
+      DJANGO_DEBUG: "0"
+      POSTGRES_HOST: postgres
+      CELERY_BROKER_URL: redis://redis:6379/0
+      VM_URL: http://victoriametrics:8428
+    ports:
+      - "514:514/udp"
+    networks: [nops-net]
+
   web:
     build:
       context: ../frontend

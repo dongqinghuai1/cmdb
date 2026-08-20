@@ -71,6 +71,28 @@ def evaluate_alert_rules():
                     ev, new = fire_event(rule, dev_id)
                     if new:
                         notify(ev, rule); fired += 1
+        elif rule.rule_type == AlertRule.RuleType.LOG:
+            # 日志关键字规则：近 for_duration_s(默认5min) 窗口内正则命中 -> 按设备触发
+            import re as _re
+            from datetime import timedelta
+            from apps.monitor.models import LogRecord
+            window = max(rule.for_duration_s, 300)
+            since = now - timedelta(seconds=window)
+            try:
+                pattern = _re.compile(rule.log_pattern or rule.metric or "")
+            except _re.error:
+                continue
+            hits = {}
+            for rec in (LogRecord.objects.filter(occurred_at__gte=since, device_id__isnull=False)
+                        .only("device_id", "message").iterator()):
+                if pattern.search(rec.message or ""):
+                    hits.setdefault(rec.device_id, rec.message[:200])
+            for dev_id, sample in hits.items():
+                ev, new = fire_event(rule, dev_id)
+                if new:
+                    ev.detail = {"sample": sample}
+                    ev.save(update_fields=["detail"])
+                    notify(ev, rule); fired += 1
         # silence check: skip devices inside silence window
     return {"fired_new": fired, "ts": str(now)}
 
