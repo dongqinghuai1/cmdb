@@ -50,15 +50,34 @@ def vm_query(promql) -> list:
         return []
 
 
+def silenced_device_ids() -> set:
+    """当前有效静默的设备集合（scope.device_ids 或 all）。"""
+    from apps.alert.models import AlertSilence
+    now = timezone.now()
+    ids = set()
+    qs = AlertSilence.objects.filter(started_at__lte=now).filter(
+        ended_at__isnull=True) | AlertSilence.objects.filter(
+        started_at__lte=now, ended_at__gt=now)
+    for s in qs.distinct():
+        scope = s.scope or {}
+        if scope.get("all"):
+            return {"*"}
+        ids.update(scope.get("device_ids") or [])
+    return ids
+
+
 @shared_task(name="alert.evaluate_rules")
 def evaluate_alert_rules():
     """Beat: every 60s. State rules (offline) evaluated against cmdb_device snapshot."""
     fired = 0
     now = timezone.now()
+    muted = silenced_device_ids()
     for rule in AlertRule.objects.filter(enabled=True):
         if rule.rule_type == AlertRule.RuleType.METRIC:
             for item in vm_query(rule.metric):
                 dev = (item.get("metric") or {}).get("device_id")
+                if dev and int(dev) in muted:
+                    continue
                 if dev and eval_compare(float(item["value"][1]), rule.operator, float(rule.threshold)):
                     ev, new = fire_event(rule, int(dev))
                     if new:
@@ -68,6 +87,8 @@ def evaluate_alert_rules():
             with connection.cursor() as cur:
                 cur.execute("SELECT id FROM cmdb_device WHERE online_status='offline' AND deleted_at IS NULL")
                 for (dev_id,) in cur.fetchall():
+                    if dev_id in muted:
+                        continue
                     ev, new = fire_event(rule, dev_id)
                     if new:
                         notify(ev, rule); fired += 1
@@ -88,6 +109,8 @@ def evaluate_alert_rules():
                 if pattern.search(rec.message or ""):
                     hits.setdefault(rec.device_id, rec.message[:200])
             for dev_id, sample in hits.items():
+                if dev_id in muted:
+                    continue
                 ev, new = fire_event(rule, dev_id)
                 if new:
                     ev.detail = {"sample": sample}

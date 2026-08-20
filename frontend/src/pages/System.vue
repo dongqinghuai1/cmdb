@@ -33,6 +33,18 @@
         </el-table-column>
       </el-table>
     </el-tab-pane>
+    <el-tab-pane label="AP 同步" name="ap">
+      <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
+        <el-select v-model="apWlc" filterable placeholder="选择无线AC（WLC）" style="width:220px">
+          <el-option v-for="d in apDevices" :key="d.id" :label="d.name + ' (' + d.hw_model + ')'" :value="d.id" />
+        </el-select>
+        <el-button type="primary" :disabled="!apWlc" @click="doApSync">解析并同步</el-button>
+        <span style="color:#909399;font-size:12px">粘贴 WLC `show ap summary` 输出，自动创建/更新 AP 台账（3504 与 9800 通用）</span>
+      </div>
+      <el-input v-model="apText" type="textarea" :rows="14"
+                placeholder="AP Name        Slots  AP Model    MAC Address       ...&#10;AP-F3-01       2      AIR-AP2802I aabb.ccdd.eeff  ... Up  10.1.1.101" />
+      <pre v-if="apResult" style="background:#f4f4f5;padding:8px;border-radius:4px;font-size:12px">{{ apResult }}</pre>
+    </el-tab-pane>
     <el-tab-pane label="用户" name="users">
       <el-table :data="users" size="small" stripe>
         <el-table-column prop="username" label="用户名" />
@@ -103,5 +115,19 @@ const remove = async (row, res) => {
     ElMessage.success("已删除");
     load();
   } catch (e) { /* 取消或后端提示 */ }
+};
+
+const apWlc = ref(null); const apText = ref(""); const apResult = ref("");
+const apDevices = ref([]);
+const loadApDevices = async () => {
+  const r = await api.get("/cmdb/devices/", { params: { page_size: 200 } });
+  apDevices.value = (r.results || []).filter((d) => d.model_code === "wlc" || d.model_code === "ap");
+};
+loadApDevices();
+const doApSync = async () => {
+  if (!apText.value.trim()) { ElMessage.warning("请粘贴 show ap summary 输出"); return; }
+  const r = await api.post("/cmdb/devices/ap-sync/", { wlc: apWlc.value, text: apText.value });
+  apResult.value = "解析 " + r.parsed + " 台 AP：新建 " + r.created + "，更新 " + r.updated;
+  ElMessage.success("同步完成");
 };
 </script>

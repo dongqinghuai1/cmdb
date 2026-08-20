@@ -131,6 +131,16 @@ class DeviceViewSet(BaseModelViewSet):
         data["business"] = list(d.business_links.values("business_id", "role"))
         return Response(data)
 
+    @action(detail=False, methods=["post"], url_path="ap-sync")
+    def ap_sync(self, request):
+        """粘贴 WLC `show ap summary` 输出同步 AP 台账。body: {wlc, text}"""
+        from apps.cmdb.ap_sync import sync_aps
+        try:
+            r = sync_aps(int(request.data["wlc"]), request.data.get("text", ""))
+        except (KeyError, ValueError) as e:
+            return Response({"detail": str(e) or "wlc/text required"}, status=400)
+        return Response(r)
+
     @action(detail=False, methods=["post"], url_path="import-excel")
     def import_excel(self, request):
         if "file" not in request.FILES:
