@@ -164,12 +164,50 @@ class DcimTicketViewSet(BaseModelViewSet):
         t = self.get_object()
         if t.status in (DcimTicket.Status.DONE, DcimTicket.Status.CANCELLED):
             return Response({"detail": "已结束工单不可再完成"}, status=400)
+        # ---- U 位落位联动（冲突校验通过才完成；冲突则工单保持原状态）----
+        from apps.cmdb.models import Device
+        from common.audit import write_audit
+        placement = None
+        dev = None
+        if t.device_id:
+            try:
+                dev = Device.objects.get(pk=t.device_id, deleted_at__isnull=True)
+            except Device.DoesNotExist:
+                return Response({"detail": "关联设备不存在（可能已删除）"}, status=400)
+        if t.kind in (DcimTicket.Kind.RACK_IN, DcimTicket.Kind.MOVE) and t.rack_id and dev:
+            if t.u_from:
+                start, units = t.u_from, max(1, (t.u_to or t.u_from) - t.u_from + 1)
+            elif dev.rack_id == t.rack_id and dev.rack_start_u:
+                start, units = dev.rack_start_u, dev.rack_units or 1  # 同柜仅迁移登记
+            else:
+                return Response({"detail": "目标机柜需提供目标 U 位起点（u_from）"}, status=400)
+            try:
+                RackService.check_placement(t.rack_id, start, units, exclude_device_id=dev.pk)
+            except ValueError as e:
+                return Response({"detail": str(e)}, status=400)
+            before = {"rack_id": dev.rack_id, "rack_start_u": dev.rack_start_u}
+            dev.rack_id, dev.rack_start_u, dev.rack_units = t.rack_id, start, units
+            dev.save(update_fields=["rack_id", "rack_start_u", "rack_units", "updated_at"])
+            write_audit(request.user, "update", "Device", dev.pk, before=before,
+                        after={"rack_id": t.rack_id, "rack_start_u": start, "units": units},
+                        source_ip=self._ip())
+            placement = {"device_id": dev.pk, "rack_id": t.rack_id,
+                         "rack_start_u": start, "units": units}
+        elif t.kind == DcimTicket.Kind.RACK_OUT and dev:
+            before = {"rack_id": dev.rack_id, "rack_start_u": dev.rack_start_u}
+            dev.rack_id, dev.rack_start_u = None, None
+            dev.save(update_fields=["rack_id", "rack_start_u", "updated_at"])
+            write_audit(request.user, "update", "Device", dev.pk, before=before,
+                        after={"rack_id": None, "rack_start_u": None},
+                        source_ip=self._ip())
+            placement = {"device_id": dev.pk, "rack_id": None, "rack_start_u": None}
         from django.utils import timezone
         t.status = DcimTicket.Status.DONE
         t.finished_at = timezone.now()
         t.result = (request.data.get("result") or "").strip()
         t.save(update_fields=["status", "finished_at", "result", "updated_at"])
-        return Response({"id": t.pk, "status": t.status, "finished_at": t.finished_at})
+        return Response({"id": t.pk, "status": t.status, "finished_at": t.finished_at,
+                         "placement": placement})
 
     @action(detail=True, methods=["post"], url_path="cancel")
     def cancel(self, request, pk=None):

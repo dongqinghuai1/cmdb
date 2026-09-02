@@ -407,3 +407,16 @@
 - **前端**：Network 链路卡头部「质量趋势」按钮 → Drawer：每接口一行（设备·接口 + 样本/均值/峰值/错包元信息 + 36 桶下行带宽迷你柱状图，tooltip 含时间/上下行/错包）。
 - **验证**：`scripts/verify_linkq.py` 7 PASS ×2（sqlite/容器 PG）：只读取样 403、取样执行计数、非法 keep_days 400、概览结构、桶单调且 ≤36、均值≤峰值（无统计源时优雅跳过）、只读可看、清理 keep_days=0。worker 日志确认任务注册。
 - **待办/坑**：① 演示库当前无 DeviceInterfaceStat 源数据 → 无真实曲线（driver/采集写入 stat 后自动有）；② 每分钟 5 取样量级可控，若海量接口需按接口去重/分层采样；③ 概览 6000 行截断+36 桶为简化版，长周期(周/月)需落到小时/天聚合表。④ 前端为迷你柱状图（无图表库依赖），宽幅趋势另需引入 echarts。
+
+---
+
+## 27. 里程碑 M2026-09-13：机房作业"完成即落位"（U 位联动闭环）
+
+- **范围**：消除"工单计划 U 位 vs 设备实际位置"双入口不一致——完成上下架/迁移工单时，**冲突校验通过才落库设备机柜位置**。
+- **实现**（apps/dcim/views.py::DcimTicketViewSet.finish）：
+  - rack_in / move：目标机柜 + U 位区间（或同柜沿用现位）→ `RackService.check_placement`（复用跨表冲突+越界校验，排除本设备）→ 冲突则 **400 且工单保持进行中**；通过后写 Device.rack_id/rack_start_u/rack_units + audit(update Device)；
+  - rack_out：清空设备机柜/U 位并 audit；
+  - repair/cable 不做位置变更；响应附 placement 结果。
+- **前端**：DcimOps 完成按钮 toast 提示落位结果（「已完成并落位 U1-2U」/「已下架出柜」）。
+- **验证**：`scripts/verify_dcimplace.py` 12 PASS ×2（sqlite/容器 PG，viewer_pg 兜底只读验证）：自建 区域/站点/机柜 链（sqlite 无 demo 数据）、上架完成落位断言、同区冲突 400 且工单保持 doing/设备未占位、改空 U 区完成、下架清位、全量清理。
+- **待办/坑**：① 完成即落位需要 u_from（无 U 目标的迁移工单无法完成——作业流要求先定 U）；② 落位冲突后工单停在 doing 需人工改 U 重试，未做自动推荐可用 U 段；③ RackReservation 预留段同样参与冲突（预期行为：预留可挡住误上架）。

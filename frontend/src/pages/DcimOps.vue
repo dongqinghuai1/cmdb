@@ -164,8 +164,11 @@ const actStart = async (row) => {
 };
 const openFinish = (row) => { finTarget.value = row; finResult.value = ""; finDlg.value = true; };
 const actFinish = async () => {
-  await api.post(`/dcim/op-tickets/${finTarget.value.id}/finish/`, { result: finResult.value });
-  ElMessage.success("已完成");
+  const r = await api.post(`/dcim/op-tickets/${finTarget.value.id}/finish/`, { result: finResult.value });
+  const p = r.placement;
+  ElMessage.success(p && p.rack_id
+    ? "已完成并落位：U" + (p.rack_start_u ?? "?") + "-" + (p.units || 1) + "U"
+    : (p && p.rack_id === null ? "已完成，设备已下架出柜" : "已完成"));
   finDlg.value = false;
   load();
 };
