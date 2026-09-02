@@ -303,3 +303,31 @@ class LinkQualitySample(models.Model):
     class Meta:
         ordering = ["-sampled_at"]
         indexes = [models.Index(fields=["device_id", "sampled_at"], name="lqs_dev_samp")]
+
+
+class VmwareSource(TimeStampedModel):
+    """vCenter 同步源（虚机发现）：持 vCenter 连接参数 + 最近同步结果。
+
+    采集纪律同 SNMP/Prometheus：周期任务 cmdb.sync_vcenter 逐源拉取（只读），
+    将虚机以 cmdb.Device（is_virtual=True, vm_source='vcenter:<source_pk>'，
+    vm_uuid 幂等键）upsert 落库；同步源删除前其虚机仍为普通虚拟设备记录。
+    mock_vms：非空时 mock 演练仅返回这些虚机名（用于收敛/删除演练），空则内置样例对。
+    """
+    name = models.CharField(max_length=64, unique=True)
+    host = models.CharField(max_length=128, help_text="vCenter 主机/地址")
+    username = models.CharField(max_length=64, blank=True)
+    secret = EncryptedTextField(null=True, blank=True)      # 密码，落库加密
+    site_id = models.BigIntegerField(null=True, blank=True)   # dcim.Site 裸外键
+    region_id = models.BigIntegerField(null=True, blank=True)  # dcim.Region 裸外键
+    is_active = models.BooleanField(default=True)
+    mock_vms = models.JSONField(default=list, blank=True, help_text="mock 演练虚机名单（空=内置样例）")
+    last_sync_at = models.DateTimeField(null=True, blank=True)
+    last_result = models.JSONField(default=dict, blank=True)
+    remark = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ["-id"]
+        verbose_name = "vCenter 同步源"
+
+    def __str__(self):
+        return f"{self.name} ({self.host})"

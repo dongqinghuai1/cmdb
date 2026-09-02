@@ -14,10 +14,11 @@ from rest_framework.response import Response
 from apps.cmdb import storage
 from apps.cmdb.models import (Business, CiModel, CiModelAttr, Device, DeviceAssetEvent,
                               DeviceAttachment, DeviceBusiness, DeviceGroup, License,
-                              LinkQualitySample, TechSnapshot)
+                              LinkQualitySample, TechSnapshot, VmwareSource)
 from apps.cmdb.serializers import (CiModelAttrSerializer, CiModelSerializer,
                                    DeviceGroupSerializer, DeviceSerializer,
-                                   DeviceInterfaceSerializer, BusinessSerializer)
+                                   DeviceInterfaceSerializer, BusinessSerializer,
+                                   VmwareSourceSerializer)
 from apps.cmdb.services import DeviceService
 from apps.system.views import BaseModelViewSet
 from common.permissions import has_perm
@@ -1089,3 +1090,47 @@ class BusinessViewSet(BaseModelViewSet):
     queryset = Business.objects.all()
     serializer_class = BusinessSerializer
     required_perm = "cmdb.device.view"
+
+
+class VmwareSourceViewSet(BaseModelViewSet):
+    """vCenter 同步源 CRUD + sync 触发（真实拉取依赖未就绪时返回校准提示）。"""
+    queryset = VmwareSource.objects.all()
+    serializer_class = VmwareSourceSerializer
+    required_perm = "cmdb.vmware.view"
+    search_fields = ["name", "host", "remark"]
+    filterset_fields = ["is_active"]
+
+    def _need_edit(self):
+        if not (self.request.user.is_superuser or has_perm(self.request.user, "cmdb.vmware.edit")):
+            raise PermissionDenied("无 vCenter 同步源管理权限（cmdb.vmware.edit）")
+
+    def perform_create(self, serializer):
+        self._need_edit()
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._need_edit()
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        self._need_edit()
+        super().perform_destroy(instance)
+
+    @action(detail=True, methods=["post"], url_path="sync")
+    def sync(self, request, pk=None):
+        """触发一轮同步。body: {mock?:0|1} —— mock=1 演练（离线样例，不触网）；
+        mock=0 走真实拉取（依赖/模板未就绪将返回 calibration 提示）。"""
+        self._need_edit()
+        src = self.get_object()
+        mock = bool(request.data.get("mock") or 0)
+        from apps.cmdb import vmsync
+        from apps.cmdb.vcenter import RequiresCalibration
+        try:
+            r = vmsync.run_sync(src, mock=mock)
+            return Response(r)
+        except RequiresCalibration as e:
+            return Response({"ok": False, "calibration": True, "error": str(e)[:200]})
+        except Exception as e:  # noqa: BLE001
+            import logging
+            logging.getLogger("cmdb").exception("vmware sync fail src=%s", src.pk)
+            return Response({"ok": False, "error": str(e)[:300]})

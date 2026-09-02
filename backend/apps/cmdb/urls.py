@@ -10,6 +10,7 @@ router.register("groups", views.DeviceGroupViewSet)
 router.register("businesses", views.BusinessViewSet)
 router.register("attachments", views.DeviceAttachmentViewSet, basename="attachments")
 router.register("licenses", views.LicenseViewSet, basename="licenses")
+router.register("vmware-sources", views.VmwareSourceViewSet)
 
 urlpatterns = [path("", include(router.urls))]
 

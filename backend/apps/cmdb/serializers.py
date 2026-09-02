@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from apps.cmdb.models import (Business, CiModel, CiModelAttr, Device,
-                              DeviceGroup, DeviceInterface)
+                              DeviceGroup, DeviceInterface, VmwareSource)
 from apps.cmdb.services import DeviceService
 
 
@@ -75,4 +75,15 @@ class BusinessSerializer(serializers.ModelSerializer):
     class Meta:
         model = Business
         fields = "__all__"
+
+
+class VmwareSourceSerializer(serializers.ModelSerializer):
+    secret = serializers.CharField(write_only=True, required=False, allow_blank=True)
+
+    class Meta:
+        model = VmwareSource
+        fields = ["id", "name", "host", "username", "secret", "site_id", "region_id",
+                  "is_active", "mock_vms", "last_sync_at", "last_result",
+                  "remark", "created_at"]
+        read_only_fields = ["last_sync_at", "last_result"]
 

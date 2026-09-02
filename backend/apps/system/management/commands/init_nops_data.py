@@ -33,6 +33,8 @@ class Command(BaseCommand):
             ("cmdb.device.view", "设备查看", "设备管理", "view"),
             ("cmdb.device.edit", "设备编辑", "设备管理", "edit"),
             ("cmdb.device.execute", "导入导出", "设备管理", "execute"),
+            ("cmdb.vmware.view", "vCenter 虚机查看", "设备管理", "view"),
+            ("cmdb.vmware.edit", "vCenter 同步源管理", "设备管理", "edit"),
             ("monitor.collector.view", "采集器查看", "监控中心", "view"),
             ("monitor.log.view", "日志查看", "监控中心", "view"),
             ("alert.rule.view", "告警规则", "告警中心", "view"),
@@ -88,11 +90,12 @@ class Command(BaseCommand):
             return role
 
         _persona("net_admin", "网络管理员", [
-            "cmdb.device.view", "dcim.region.view", "dcim.rack.view", "dcim.power.view",
+            "cmdb.device.view", "cmdb.vmware.view", "dcim.region.view", "dcim.rack.view", "dcim.power.view",
             "alert.event.view", "change.ticket.view", "report.snapshot.view",
         ], ["menu.home", "menu.monitor", "menu.net", "menu.asset", "menu.dcim", "menu.workflow"])
         _persona("sys_admin", "系统运维", [
-            "cmdb.device.view", "cmdb.model.view", "monitor.collector.view", "monitor.log.view",
+            "cmdb.device.view", "cmdb.model.view", "cmdb.vmware.view", "cmdb.vmware.edit",
+            "monitor.collector.view", "monitor.log.view",
             "alert.event.view", "alert.rule.view", "inspect.template.view", "inspect.run.view",
             "automate.script.view", "automate.run.view", "change.incident.view",
             "system.duty.view", "system.duty.edit",

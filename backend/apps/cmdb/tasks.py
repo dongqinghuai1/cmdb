@@ -61,3 +61,24 @@ def prom_poll_task():
         return {"skipped": False, **stats}
     except Exception as e:  # noqa: BLE001 —— 接入失败不拖垮 beat
         return {"skipped": False, "error": str(e)[:300]}
+
+
+@shared_task(name="cmdb.sync_vcenter")
+def sync_vcenter_task():
+    """vCenter 虚机同步（beat 每小时 25 分）：逐启用源拉取 → Device upsert/收敛软删。
+    真实拉取依赖/模板未就绪（RequiresCalibration）时记入该源 last_result，不中断。"""
+    from apps.cmdb.models import VmwareSource
+    from apps.cmdb import vmsync
+    from apps.cmdb.vcenter import RequiresCalibration
+    out = []
+    for src in VmwareSource.objects.filter(is_active=True).order_by("id"):
+        try:
+            r = vmsync.run_sync(src, mock=False)
+            out.append({"source": src.name, **r})
+        except RequiresCalibration as e:
+            out.append({"source": src.name, "calibration": True, "error": str(e)[:200]})
+        except Exception as e:  # noqa: BLE001
+            logger = __import__("logging").getLogger("cmdb")
+            logger.exception("vcenter sync failed src=%s", src.id)
+            out.append({"source": src.name, "error": str(e)[:200]})
+    return {"sources": len(out), "detail": out}
