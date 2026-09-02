@@ -333,3 +333,62 @@ def collect(device, profile="if-mib", mock=False, port=161, community="public",
         except RequiresCalibration as e:
             wireless = {"aps": 0, "note": str(e)}
     return {"profile": profile, "mock": mock, **res, "wireless": wireless}
+
+
+# ---------- LLDP-MIB（IEEE 802.1AB-2005）语义 ----------
+# lldpMIB = 1.0.8802.1.1.2；lldpObjects 下 lldpConfiguration=1 / lldpStatistics=2 /
+# lldpLocalSystemData=3 / lldpRemoteSystemsData=4。
+#   lldpLocPortTable（本地端口号 → 描述，索引=portNum）: ...1.3.1.1.<col>.<portNum>
+#   lldpRemTable（远端邻居，索引=timeMark.localPortNum.remIndex）: ...1.4.1.1.<col>.<t>.<p>.<r>
+# 仅取"只读、只发现、不写设备"；落库与比对在 apps/topo（LldpNeighbor）+ dcim（Cable）。
+LLDP_LOC_ENTRY = "1.0.8802.1.1.2.1.3.1.1"
+LLDP_REM_ENTRY = "1.0.8802.1.1.2.1.4.1.1"
+# entry 内列号 → 语义（本驱动消费子集；列 1-3 为索引/TimeFilter 不可访问）
+LLDP_LOC_COLS = {"port_id_subtype": 2, "port_id": 3, "port_desc": 4}
+LLDP_REM_COLS = {"chassis_id_subtype": 4, "chassis_id": 5,
+                 "port_id_subtype": 6, "port_id": 7, "port_desc": 8,
+                 "sys_name": 9, "sys_desc": 10}
+
+
+def _parse_entry_rows(rows, entry_prefix, col_map, n_idx):
+    """通用表解析：OID = <entry>.<col>.<idx...> → {(idx_tuple): {col: value}}。"""
+    prefix = entry_prefix + "."
+    rev = {v: k for k, v in col_map.items()}
+    out = {}
+    for oid, val in rows:
+        if not oid.startswith(prefix):
+            continue
+        rest = oid[len(prefix):].split(".")
+        try:
+            col, idx = int(rest[0]), tuple(int(x) for x in rest[1:])
+        except (ValueError, IndexError):
+            continue
+        name = rev.get(col)
+        if name is None or len(idx) < n_idx:
+            continue
+        out.setdefault(idx, {})[name] = val
+    return out
+
+
+def parse_lldp_loc(rows):
+    """lldpLocPortTable rows → {port_num: {port_id_subtype/port_id/port_desc}}。"""
+    raw = _parse_entry_rows(rows, LLDP_LOC_ENTRY, LLDP_LOC_COLS, 1)
+    return {idx[0]: m for idx, m in raw.items()}
+
+
+def parse_lldp_rem(rows):
+    """lldpRemTable rows → {(local_port, rem_index): {chassis_id_subtype/chassis_id/...}}。
+    同 (port, rem) 的不同 timeMark 行合并（取后到者）。"""
+    raw = _parse_entry_rows(rows, LLDP_REM_ENTRY, LLDP_REM_COLS, 3)
+    out = {}
+    for idx, m in raw.items():
+        out.setdefault((idx[1], idx[2]), {}).update(m)
+    return out
+
+
+def collect_lldp(host, community, port=161, timeout=1.5):
+    """LLDP 邻居走查（只读探针）：lldpLocPortTable + lldpRemTable → 解析结果。
+    无 LLDP 使能的设备返回空表（不报错）。调用方负责凭据与目标范围。"""
+    loc_rows = snmpwalk(host, community, LLDP_LOC_ENTRY, port=port, timeout=timeout)
+    rem_rows = snmpwalk(host, community, LLDP_REM_ENTRY, port=port, timeout=timeout)
+    return {"local": parse_lldp_loc(loc_rows), "remote": parse_lldp_rem(rem_rows)}

@@ -10,5 +10,6 @@ router.register("edges", views.TopologyEdgeViewSet)
 
 urlpatterns = [
     path("graph/", views.GraphView.as_view(), name="topo-graph"),
+    path("lldp-discover/", views.LldpDiscoverView.as_view(), name="topo-lldp-discover"),
     path("", include(router.urls)),
 ]

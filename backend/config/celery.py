@@ -54,4 +54,6 @@ app.conf.beat_schedule = {
     "cmdb-snmp-collect": {"task": "cmdb.snmp_collect", "schedule": 600.0},
     # Prometheus 只读消费（5 分钟一次 → 写 DeviceInterfaceStat；NOPS_PROM_URL 缺省跳过）
     "cmdb-prom-poll": {"task": "cmdb.prom_poll", "schedule": 300.0},
+    # LLDP 拓扑自动发现（10 分钟一次 → topo_lldpneighbor；无 snmp_v2c 凭据设备则跳过）
+    "topo-lldp-discover": {"task": "topo.lldp_discover", "schedule": 600.0},
 }

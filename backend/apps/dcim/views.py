@@ -121,6 +121,23 @@ class CableViewSet(BaseModelViewSet):
     required_perm = "dcim.rack.view"
     filterset_fields = ["a_interface_id", "b_interface_id", "status", "source"]
 
+    @action(detail=False, methods=["post"], url_path="compare-lldp")
+    def compare_lldp(self, request):
+        """线缆台账 vs LLDP 邻居比对（ER D7）：确认/置 mismatch/自动补录 source=lldp。
+        body {site?} 可选限定机房。rack.edit 写门禁 + audit。"""
+        _need_perm(self.request.user, "dcim.rack.edit")
+        from apps.dcim.services import compare_lldp_cables
+        from common.audit import write_audit
+        site = request.data.get("site")
+        try:
+            r = compare_lldp_cables(site_id=int(site) if site else None)
+        except (TypeError, ValueError):
+            return Response({"detail": "site 必须为整数"}, status=400)
+        write_audit(request.user, "execute", "Cable", "compare-lldp",
+                    after={**r, "action": "compare-lldp", "site": site},
+                    source_ip=request.META.get("REMOTE_ADDR", ""))
+        return Response(r)
+
 
 class DcimTicketViewSet(BaseModelViewSet):
     """机房作业工单：上下架/迁移/维修/布线；读=dcim.rack.view，写=dcim.rack.edit。"""

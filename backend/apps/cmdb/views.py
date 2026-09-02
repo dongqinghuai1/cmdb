@@ -228,6 +228,12 @@ class DeviceViewSet(BaseModelViewSet):
         if not dev:
             return Response({"detail": "device not found"}, status=404)
         name = dev.name
+        # 跨域裸外键残留先清：LLDP 邻居行（topo 域）以接口 id 关联，不随设备级联删除
+        from apps.cmdb.models import DeviceInterface
+        iface_ids = list(DeviceInterface.objects.filter(device_id=pk).values_list("id", flat=True))
+        if iface_ids:
+            from apps.topo.models import LldpNeighbor
+            LldpNeighbor.objects.filter(local_interface_id__in=iface_ids).delete()
         Device.all_objects.filter(pk=pk).delete()  # 全量 SQL 删除（含附件/授权等级联）
         from common.audit import write_audit
         write_audit(request.user, "purge", "Device", pk, after={"name": name},

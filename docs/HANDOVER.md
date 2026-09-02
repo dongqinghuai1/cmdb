@@ -1,6 +1,6 @@
 # 交接文档（面向下一个开发智能体）
 
-> 最后更新：2026-09-03（资产生命周期+保修到期提醒上线 M2026-09-03d）。
+> 最后更新：M2026-09-17（拓扑自动发现 + 线缆/LLDP 比对上线，见文末 §31）。
 > 一期+二期已完成并实测通过；三期「自动化运维」（M2026-09-02）、「轻量事件单」（M2026-09-02b）、「轻量变更单」（M2026-09-02c）、「CMDB 基础补齐 R1/R2/R3」（M2026-09-03/03b/03c）、「资产生命周期」（M2026-09-03d）已上线，见文末里程碑。
 > 读完本文 + DEPLOY.md + DEVELOPMENT.md 即可接手。
 
@@ -37,8 +37,8 @@
 
 ## 3. 待办清单（按 PRD 路线图）
 
-**二期**：syslog 接收+日志检索、NCM 配置备份/diff、拓扑(LLDP 自动发现+G6 画布)、AP 台账同步、告警收敛/静默、IPAM、飞书 SSO、Prometheus remote_write、路由快照采集（~~change_ticket 轻量变更单~~ ✅ 已于三期补齐，见 M2026-09-02c）
-**三期**：~~自动化运维~~ ✅、~~轻量事件单~~ ✅、~~轻量变更单(二期欠账)~~ ✅；剩余：安全基线、资产生命周期+保修/借用、报表中心、线缆与 LLDP 比对、固件升级/值班、PDU 电源、虚机 vCenter 同步
+**二期**：syslog 接收+日志检索、NCM 配置备份/diff、拓扑(~~LLDP 自动发现~~ ✅M2026-09-17；G6 手工布局保存待办)、AP 台账同步、告警收敛/静默、IPAM、飞书 SSO、Prometheus remote_write、路由快照采集（~~change_ticket 轻量变更单~~ ✅ 已于三期补齐，见 M2026-09-02c）
+**三期**：~~自动化运维~~ ✅、~~轻量事件单~~ ✅、~~轻量变更单(二期欠账)~~ ✅、~~线缆与 LLDP 比对~~ ✅（M2026-09-17）；剩余：安全基线、资产生命周期+保修/借用、报表中心、固件升级/值班、PDU 电源、虚机 vCenter 同步
 **四期**：AI（LLM 网关已留 settings.LLM_*、NL2Query、根因分析、ChatOps 飞书机器人、RAG）
 **技术债**：ai/report 骨架 app 补全；巡检只实现了 2 种检查类型（online 状态/接口错包阈值）；collect_shard 需要真实 SNMP 设备联调；audit_log/log_record/login_event 分区表转换（ER D12）；事件单超时仅时间线提醒（飞书/升级未接）
 
@@ -75,6 +75,7 @@
 | **verify_cmdb_r2.py** | **CMDB R2：tech 概览端点区块/扩展入口 / 动态分组仅预览不改成员 / 软件版本聚合与 hw_model 过滤** | **9 PASS（sqlite 与容器 PG 各一遍）** |
 | **verify_cmdb_r3.py** | **CMDB R3：TechSnapshot 越权/参数校验/写入/最新覆盖/tech 透出/占位回落/只读可见** | **7 PASS（sqlite 与容器 PG 各一遍）** |
 | **verify_lifecycle.py** | **资产生命周期：流转留事件/同状态与非法 400/资产事件读写/越权/保修汇总口径与清单(临期±1天容差)** | **12 PASS（sqlite 与容器 PG 各一遍）** |
+| **verify_topo_lldp.py** | **拓扑自动发现+线缆/LLDP 比对：LLDP-MIB 解析纯函数 / mock 发现落邻居+远端回填+构图 / 比对三态(确认·mismatch·自动补录) / 幂等 / 权限负例 / purge 清理孤儿** | **22 PASS（sqlite 与容器 PG 各一遍）** |
 | smoke_test.py | 端口级冒烟（登录->建柜->上架->冲突） | 10 PASS |
 | seed_demo.py | 演示数据：2 地区/2 机房/3 机柜/10 设备 | 幂等 |
 | seed_floorplan.py | 上海机房平面图示例布局 | 幂等 |
@@ -454,3 +455,16 @@
 - **告警贯通** `POST /alerts/webhook/prometheus/`（Alertmanager webhook → `AlertEvent`）：`NOPS_PROM_WEBHOOK_TOKEN` 配置时校验 `X-Webhook-Token`；labels.instance IP 命中 CMDB 设备、未命中 device_id=0（未关联哨兵）；firing 同 key(alertname+instance) 去重递增 `fired_count`，resolved 关闭对应 active 事件——事件可继续走既有"一键转事件单"动作。容器 `.env` 注入 token 演示值 testtok（文件已 gitignore）。
 - **验证**：`scripts/verify_prom.py` **10 PASS ×2**（sqlite/容器 PG）：只读触发 403；mock 拉取写 stat（1234000/567000）；未配 URL 400 提示；webhook created/同 key updated/未命中设备落 0/错误 token 403/resolved 关闭/落库可见。worker 日志确认 `cmdb.prom_poll` 注册。
 - **待办/坑**：① 查询模板按你方 exporter 标签需校准（node_network 为默认示例，可 NOPS_PROM_QUERIES 全量覆盖——无线走 snmp_exporter 思科 MIB 后亦在此表加查询即可，9800 校准接缝自动消失）；② webhook 未做 notification 渠道推送（事件已入 AlertEvent，飞书转发复用现有通道机制后续）；③ 只写首接口 stat（ifIndex 最小）——按 query labels 对齐接口名（interface/ifName）映射为后续。④ prom_poll 单次失败记 error 不告警；⑤ AlertEvent.device_id 未命中用 0，查询未关联事件需过滤。
+
+---
+
+## 31. 里程碑 M2026-09-17：拓扑自动发现 + 线缆/LLDP 比对（snmp.py LLDP-MIB 探针闭环）
+
+- **范围**：二期欠账"拓扑(LLDP 自动发现)"与三期"线缆与 LLDP 比对"合并落地，数据源走既有 SNMP 直采驱动（**LLDP-MIB 标准表，IEEE 802.1AB-2005**），复用 `apps/cmdb/snmp.py` BER 走查层，不另起采集器、不触网写设备。
+- **走查驱动** `apps/cmdb/snmp.py` 追加 LLDP-MIB 语义层（纯函数，不落库）：常量锚定 `lldpLocPortTable`(`1.0.8802.1.1.2.1.3.1.1`) 与 `lldpRemTable`(`1.0.8802.1.1.2.1.4.1.1`) 的标准列号；`parse_lldp_loc/parse_lldp_rem`（timeMark.localPort.remIndex 三索引归组）；`collect_lldp(host, community, port)` 一次走查两表。列号取自 IEEE 802.1AB-2005 官方 MIB（本地留档可查），与 9800 私有 MIB 不同——无校准风险。
+- **发现编排** `apps/topo/services.py`：`_snmp_candidates()`（与 cmdb.snmp_collect 同口径：绑 snmp_v2c 凭据+管理 IP+启用）→ `_build_maps()`（CMDB 名称/接口 MAC/管理 IP 三索引）→ `_sync_device_neighbors()`（本地端口号先按 if_index、再按 loc 表描述兜底；远端解析优先级 sysName → chassisId macAddress(4) → networkAddress(5/IPv4)；update_or_create 按 (local_interface_id, chassis_id, port_id)；90 分钟未再见的行清理=LLDP TTL 老化语义）。`discover_lldp(mock=)`：mock 仅对 TEST-NET(198.51.100.0/24) 设备生成确定性两两织体（回归专用、不受环境残留干扰）。
+- **任务/端点**：`apps/topo/tasks.py::topo.lldp_discover`（beat 每 10 分钟，无目标自动跳过）；`POST /topo/lldp-discover/` {mock:0|1}（默认 1 防误触，execute 权限 + 审计）；`/topo/graph/` 与 `/topo/lldp-neighbors/` 复用既有（自动边/伪未纳管节点已支持）。
+- **线缆比对** `apps/dcim/services.py::compare_lldp_cables(site_id=None)`（ER D7，幂等）：手工台账线缆两端接口在邻居中出现且对端设备+端口名匹配 → 确认(恢复 active+刷新 last_seen)；台账有而 LLDP 未发现 → `status=mismatch`+remark（不删台账）；LLDP 可见而台账缺失（对端已纳管且接口可解析）→ 补录 `source=lldp` 线缆。端点 `POST /dcim/cables/compare-lldp/`（rack.edit 写门禁 + 审计）。跨域只读一律 raw SQL，写回仅动 dcim.Cable。
+- **配套修复**：设备 purge（`/cmdb/devices/{id}/purge/`）先清理跨域裸外键残留 topo_lldpneighbor（防孤儿堆积）；规避 GenericIPAddressField 上 `.exclude(manage_ip=None).exclude(manage_ip="")` 连用的 Django 组合矛盾（空串被 IPField 预置为 None，两条件叠加恒空——删空串条件）。
+- **验证**：`scripts/verify_topo_lldp.py` **22 PASS ×2**（sqlite/容器 PG）：P 组 LLDP-MIB 解析纯函数（本地不触网）；S 组 mock 全链路——造 A/B+凭据+接口 → 发现落邻居+远端回填 ≥4 → graph 出 A-B 自动边 → 手工线缆 pair1 确认/pair3 mismatch/未录 pair2 自动补录 source=lldp → 重复比对幂等(不新增) → net_demo(有读无写) 403 双负例 → purge 后无孤儿邻居。回归：api_test 33、verify_snmp 8、verify_prom 10 均保持（sqlite+PG）。
+- **待办/坑**：① 真实 LLDP 走查依赖设备已绑 snmp_v2c 凭据且开启 LLDP（测试用 mock）；生产若走 Prometheus/snmp_exporter 拉 LLDP（需 exporter 配置该表+标签），本链路不冲突但需查询映射模板（见 M30 待办①）；② 比对的口径是接口名精确匹配（if_name 规范对齐，M28 同坑）；③ TopologyNode 布局坐标保存（G6 手工布局）仍无 API——拓扑"自动+手工修正"的另一半待办；④ 根因抑制（告警 suppressed_by_id 依赖拓扑父设备 down 判断）已具备数据源，见告警收敛待办。
