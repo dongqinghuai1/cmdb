@@ -861,7 +861,8 @@ class DeviceViewSet(BaseModelViewSet):
         mock = str(request.data.get("mock", 1)) not in ("0", "false", "False")
         from apps.cmdb import snmp as snmp_mod
         if mock:
-            r = snmp_mod.collect(dev, profile="if-mib", mock=True)
+            r = snmp_mod.collect(dev, profile="if-mib", mock=True,
+                                 octets_step=request.data.get("octets_step") or 0)
         else:
             from apps.system.models import Credential
             cred = (Credential.objects.filter(pk=dev.credential_id)

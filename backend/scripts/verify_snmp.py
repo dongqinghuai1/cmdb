@@ -151,9 +151,17 @@ check("S4 只读触发 -> 403", s == 403, str(s))
 s, r = call("POST", f"/cmdb/devices/{tid}/snmp-test/", admin, {"mock": 1})
 check("S5 mock 采集落接口", s == 200 and r.get("created") >= 3
       and r.get("interfaces") == 3 and r.get("profile") == "if-mib", str(r)[:200])
-s, r2 = call("POST", f"/cmdb/devices/{tid}/snmp-test/", admin, {"mock": 1})
-check("S6 二次幂等(created=0)", s == 200 and r2.get("created") == 0
-      and r2.get("interfaces") == 3, str(r2)[:160])
+s, r2 = call("POST", f"/cmdb/devices/{tid}/snmp-test/", admin, {"mock": 1, "octets_step": 2000})
+rates = r2.get("rates") or []
+check("S6 二次采样幂等且速率>0", s == 200 and r2.get("created") == 0
+      and r2.get("interfaces") == 3
+      and rates and rates[0].get("in_bps", 0) > 0
+      and rates[0].get("in_octets_total", 0) >= 1_000_000_000,
+      str(r2)[:260])
+s, r3 = call("POST", f"/cmdb/devices/{tid}/snmp-test/", admin, {"mock": 1, "octets_step": 2000})
+rates3 = r3.get("rates") or []
+check("S6b 三次同值采样 delta=0 速率归零",
+      s == 200 and (rates3[0].get("in_bps") == 0 if rates3 else True), str(r3)[:160])
 s, r = call("POST", f"/cmdb/devices/{tid}/snmp-test/", admin, {"mock": 0})
 check("S7 真实采集无凭据 -> 400", s == 400 and "SNMP 凭据" in r.get("detail", ""), str(r)[:140])
 # 清理

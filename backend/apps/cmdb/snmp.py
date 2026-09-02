@@ -201,19 +201,23 @@ def parse_if_mib(rows):
     return out
 
 
-def _mock_if_rows():
+def _mock_if_rows(octets_step=0):
     base = "1.3.6.1.2.1.2.2.1"
     rows = []
     for idx, (descr, speed, oper) in enumerate([
             ("GigabitEthernet0/0/0", 1000000000, 1),
             ("TwentyFiveGigE1/0/1", 25000000000, 1),
             ("GigabitEthernet0/0/2", 1000000000, 2)], start=1):
+        oct_in = 1_000_000_000 + idx * 1000 + octets_step
+        oct_out = 500_000_000 + idx * 500 + octets_step
         rows += [(f"{base}.{IF_COLS['ifIndex']}.{idx}", idx),
                  (f"{base}.{IF_COLS['ifDescr']}.{idx}", descr),
                  (f"{base}.{IF_COLS['ifType']}.{idx}", 6),
                  (f"{base}.{IF_COLS['ifSpeed']}.{idx}", speed),
                  (f"{base}.{IF_COLS['ifAdminStatus']}.{idx}", 1),
                  (f"{base}.{IF_COLS['ifOperStatus']}.{idx}", oper),
+                 (f"{base}.{IF_COLS['ifInOctets']}.{idx}", oct_in),
+                 (f"{base}.{IF_COLS['ifOutOctets']}.{idx}", oct_out),
                  (f"{base}.{IF_COLS['ifInErrors']}.{idx}", idx * 7),
                  (f"{base}.{IF_COLS['ifOutErrors']}.{idx}", idx * 3)]
     return rows
@@ -250,9 +254,12 @@ def collect_aps_9800(host, community, port=161):
 
 # ---------- 落库 ----------
 def upsert_interfaces(device, parsed):
-    """parsed: {idx: {ifDescr..}} → cmdb DeviceInterface + DeviceInterfaceStat。"""
+    """parsed: {idx: {ifDescr..}} → cmdb DeviceInterface + DeviceInterfaceStat。
+    计数器差值（两次采样）→ in/out bps 与错误速率；同时留存 octets/errors 快照。"""
+    from django.utils import timezone
     from apps.cmdb.models import DeviceInterface, DeviceInterfaceStat
     created = updated = 0
+    now = timezone.now()
     for idx, m in parsed.items():
         name = (m.get("ifDescr") or f"if{idx}")[:64]
         oper = {1: "up", 2: "down"}.get(m.get("ifOperStatus"), "")
@@ -275,21 +282,45 @@ def upsert_interfaces(device, parsed):
                 iface.save(update_fields=changed + ["updated_at"])
             updated += 1
         stat, _ = DeviceInterfaceStat.objects.get_or_create(interface=iface)
-        patch = {}
+        patch = {"sampled_at": now}
+        if m.get("ifInOctets") is not None:
+            new_in_oct = int(m["ifInOctets"])
+            patch["in_octets_total"] = new_in_oct
+            if stat.sampled_at and now > stat.sampled_at:
+                elapsed = (now - stat.sampled_at).total_seconds()
+                d = new_in_oct - stat.in_octets_total
+                if elapsed > 0 and d >= 0:
+                    patch["in_bps"] = int(d * 8 / elapsed)
+        if m.get("ifOutOctets") is not None:
+            new_out_oct = int(m["ifOutOctets"])
+            patch["out_octets_total"] = new_out_oct
+            if stat.sampled_at and now > stat.sampled_at:
+                elapsed = (now - stat.sampled_at).total_seconds()
+                d = new_out_oct - stat.out_octets_total
+                if elapsed > 0 and d >= 0:
+                    patch["out_bps"] = int(d * 8 / elapsed)
         if m.get("ifInErrors") is not None and int(m["ifInErrors"]) != stat.in_errors_total:
             patch["in_errors_total"] = int(m["ifInErrors"])
         if m.get("ifOutErrors") is not None and int(m["ifOutErrors"]) != stat.out_errors_total:
             patch["out_errors_total"] = int(m["ifOutErrors"])
         if patch:
             DeviceInterfaceStat.objects.filter(pk=stat.pk).update(**patch)
-    return {"created": created, "updated": updated, "interfaces": len(parsed)}
+    # 读回最新速率（供调用方/回归断言）
+    rates = list(DeviceInterfaceStat.objects.filter(interface__device_id=device.pk)
+                 .select_related("interface")
+                 .values("interface__name", "in_bps", "out_bps", "in_octets_total")
+                 .order_by("interface__if_index"))
+    return {"created": created, "updated": updated, "interfaces": len(parsed),
+            "rates": rates}
 
 
-def collect(device, profile="if-mib", mock=False, port=161, community="public"):
-    """对单台设备执行采集。mock=True 走内置样例（回归/演示，不触网）。
-    cisco_wlc_9800 无线部分未校准前抛 RequiresCalibration（由调用方记录）。"""
+def collect(device, profile="if-mib", mock=False, port=161, community="public",
+            octets_step=0):
+    """对单台设备执行采集。mock=True 走内置样例（回归/演示，不触网；octets_step
+    用于制造两次采样计数器增量以验证速率计算）。cisco_wlc_9800 无线部分未校准前抛
+    RequiresCalibration（由调用方记录）。"""
     if mock:
-        rows = _mock_if_rows()
+        rows = _mock_if_rows(int(octets_step or 0))
     else:
         rows = snmpwalk(device.manage_ip or device.name, community,
                         IF_ROOT, port=port)

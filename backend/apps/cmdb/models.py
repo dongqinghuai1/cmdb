@@ -168,6 +168,10 @@ class DeviceInterfaceStat(models.Model):
     optical_tx_dbm = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     optical_rx_dbm = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     poe_watt = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    # SNMP 计数器快照（IF-MIB octets/errors）与上次采样时间：用于两次采样差值算速率
+    in_octets_total = models.BigIntegerField(default=0)
+    out_octets_total = models.BigIntegerField(default=0)
+    sampled_at = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
 

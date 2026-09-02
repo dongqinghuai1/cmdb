@@ -433,3 +433,13 @@
 - **验证**：`scripts/verify_snmp.py` 7 PASS ×2（sqlite/容器 PG）：**本地 UDP mock SNMP 服务器真走查**——BER 收发按序返回表数据并正确解码 octet/int/counter、表尾 err 停止；只读触发 403；mock 采集创建 3 接口幂等；真实采集无凭据 400 提示。worker 日志确认 `cmdb.snmp_collect` 注册。
 - **Cisco 9800L 无线落地路径（等一次样本）**：在可达 WLC 的主机跑 `snmpwalk -v2c -c <ro团体> <WLC_IP> 1.3.6.1.4.1.9.9.429`（AIRESPACE-WIRELESS-MIB 根），把输出贴我 → 补填 `WLC9800_AP_OIDS`（ap_name/mac/model/ip/channel/tx_power/clients）→ 复用现有 WirelessApInfo + tech-parse 展示链；SNMP v1/v3 与 trap 监听为后续。
 - **待办/坑**：① 每设备错误只记录不重试退避（后续接告警）；② 计数器为存量快照（octets delta→bps 的差值计算需连续两次采样差/秒——与 LinkQualitySample 打通即速率曲线，已列下一步）；③ ifTable 名称列可能与现有 stat 采集命名不一致（upsert 按 device+name 幂等，需设备侧对齐 if_name 规范）。
+
+---
+
+## 29. 里程碑 M2026-09-15：SNMP 计数器差值 → 速率（两次采样差分）
+
+- **范围**：打通"通用 IF-MIB 计数器 → bps/错误速率 → LinkQualitySample 曲线"的数据源——两次采样差分：`(octets_now - octets_prev) * 8 / 秒`。
+- **模型**：`DeviceInterfaceStat` 增 `in_octets_total/out_octets_total/sampled_at`（迁移 cmdb.0005）。
+- **逻辑**（apps/cmdb/snmp.py）：`upsert_interfaces` 留存 octets/errors 快照与采样时刻；下次采样 delta≥0 时算 `in_bps/out_bps`（计数器回绕或减小则跳过保持原值）；响应附各接口当前 `rates`。mock 行支持 `octets_step`（制造可控增量用于回归）。
+- **验证**：`scripts/verify_snmp.py` 升至 **8 PASS** ×2：二次采样（step=2000）速率>0 且 octets 快照累积、三次同值 delta=0 速率归零、既有 BER/权限/幂等/无凭据用例全绿。
+- **坑**：同值采样 delta=0 显式写 0 归零（负 delta=回绕不动作）；elapsed 过短会使速率数值偏大（真实周期为 beat 10 分钟固定、稳定）。下一步：`cmdb.snmp_collect` 成功后顺带触发 `sample_link_quality`，或由每 5 分钟取样任务独立消费 stat —— 曲线即有真实源。
