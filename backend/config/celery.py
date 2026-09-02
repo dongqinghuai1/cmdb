@@ -56,4 +56,6 @@ app.conf.beat_schedule = {
     "cmdb-prom-poll": {"task": "cmdb.prom_poll", "schedule": 300.0},
     # LLDP 拓扑自动发现（10 分钟一次 → topo_lldpneighbor；无 snmp_v2c 凭据设备则跳过）
     "topo-lldp-discover": {"task": "topo.lldp_discover", "schedule": 600.0},
+    # 安全基线每日核查（最新备份 × 规则 → 结果+不合规告警）
+    "ncm-baseline-check": {"task": "ncm.baseline_check", "schedule": crontab(hour=6, minute=30)},
 }

@@ -97,8 +97,11 @@ class BaselineRuleViewSet(BaseModelViewSet):
 
     @action(detail=False, methods=["post"], url_path="check")
     def check(self, request):
-        n = run_baseline(request.data.get("rule_ids"))
-        return Response({"checked": n})
+        """执行基线核查。body: {rule_ids?: [..], device_ids?: [..]}（缺省=全量规则×全部有备份设备）。
+        返回 {checked, devices, compliant, violations, by_rule, alerts_*}。"""
+        r = run_baseline(rule_ids=request.data.get("rule_ids"),
+                         device_ids=request.data.get("device_ids"))
+        return Response(r)
 
 
 class BaselineResultViewSet(viewsets.ReadOnlyModelViewSet):
@@ -107,3 +110,33 @@ class BaselineResultViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [RbacPermission]
     required_perm = "cmdb.device.view"
     filterset_fields = ["rule", "device_id", "compliant"]
+
+    @action(detail=False, methods=["get"], url_path="summary")
+    def summary(self, request):
+        """基线合规总览：每 (规则×设备) 最新一次结果 → 按规则聚合 {checked, compliant, violations}。"""
+        from django.db.models import Count
+        seen = {}
+        for r in (BaselineCheckResult.objects.select_related("rule")
+                  .order_by("-created_at", "-id").values(
+                      "id", "rule_id", "device_id", "compliant")):
+            seen.setdefault((r["rule_id"], r["device_id"]), r)
+        per_rule = {}
+        for r in seen.values():
+            agg = per_rule.setdefault(r["rule_id"],
+                                      {"rule_id": r["rule_id"], "checked": 0,
+                                       "compliant": 0, "violations": 0})
+            agg["checked"] += 1
+            agg["compliant" if r["compliant"] else "violations"] += 1
+        rules = {r.id: r for r in BaselineRule.objects.all()}
+        rows = sorted(per_rule.values(), key=lambda x: -x["violations"])
+        for x in rows:
+            rl = rules.get(x["rule_id"])
+            x["rule_name"] = rl.name if rl else ""
+            x["severity"] = rl.severity if rl else ""
+        return Response({
+            "rules": rows,
+            "totals": {"rules_checked": len(rows),
+                       "checked": sum(x["checked"] for x in rows),
+                       "violations": sum(x["violations"] for x in rows)},
+            "ts": None,
+        })

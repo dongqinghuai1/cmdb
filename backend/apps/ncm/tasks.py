@@ -30,3 +30,12 @@ def backup_device(device_id):
         return {"device": device_id, "ok": False, "reason": "ssh fetch failed / no credential"}
     backup, changed = save_backup(device_id, cfg, trigger="manual")
     return {"device": device_id, "ok": True, "backup": backup.id, "changed": changed}
+
+
+@shared_task(name="ncm.baseline_check")
+def baseline_check():
+    """每日基线核查（beat 06:30）：全规则×最新备份，结果留痕 + 不合规联动告警。"""
+    from apps.ncm.services import run_baseline
+    r = run_baseline()
+    return {"ts": r["ts"], "checked": r["checked"], "violations": r["violations"],
+            "alerts_opened": r["alerts_opened"], "alerts_resolved": r["alerts_resolved"]}

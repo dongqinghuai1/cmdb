@@ -243,6 +243,11 @@ class DeviceViewSet(BaseModelViewSet):
                         "WHERE related_alert_event_id IS NOT NULL")
             ref_ids = {r[0] for r in cur.fetchall()}
         AlertEvent.objects.filter(device_id=pk).exclude(pk__in=ref_ids).delete()
+        # NCM 域裸外键残留：配置备份/变更事件/基线结果（device_id 无 FK，不随设备删除）
+        from apps.ncm.models import BaselineCheckResult, ConfigBackup, ConfigChangeEvent
+        ConfigBackup.objects.filter(device_id=pk).delete()
+        ConfigChangeEvent.objects.filter(device_id=pk).delete()
+        BaselineCheckResult.objects.filter(device_id=pk).delete()
         Device.all_objects.filter(pk=pk).delete()  # 全量 SQL 删除（含附件/授权等级联）
         from common.audit import write_audit
         write_audit(request.user, "purge", "Device", pk, after={"name": name},

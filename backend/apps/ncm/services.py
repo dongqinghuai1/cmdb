@@ -87,19 +87,104 @@ def fetch_via_ssh(device_id):
         return None
 
 
-def run_baseline(rule_ids=None):
+def _device_meta(device_ids):
+    """CMDB 设备元信息（跨域只读：函数内导入，仓库既有先例）。"""
+    if not device_ids:
+        return {}
+    from apps.cmdb.models import Device
+    return {d.id: {"name": d.name, "driver_type": d.driver_type, "region_id": d.region_id}
+            for d in Device.objects.filter(id__in=list(device_ids), deleted_at__isnull=True)}
+
+
+def _in_scope(rule, meta, device_id):
+    """规则 scope（JSON）：device_ids / driver_types / regions 任一存在即须命中；空 scope=全量。"""
+    scope = rule.scope or {}
+    if scope.get("device_ids") and device_id not in scope["device_ids"]:
+        return False
+    if scope.get("driver_types") and (meta or {}).get("driver_type") not in scope["driver_types"]:
+        return False
+    if scope.get("regions") and (meta or {}).get("region_id") not in scope["regions"]:
+        return False
+    return True
+
+
+def _sync_baseline_alert(rule, device_id, result):
+    """基线结果 -> AlertEvent（dedup: {device}:baseline:{rule}）。violation 开/续、合规即关。"""
+    try:
+        from apps.alert.models import AlertEvent
+        from django.utils import timezone
+        key = f"{device_id}:baseline:{rule.id}"
+        active = AlertEvent.objects.filter(
+            dedup_key=key, status__in=("firing", "acknowledged", "processing")).first()
+        if not result.compliant:
+            detail = {"result_id": result.id, "rule_name": rule.name,
+                      "severity": rule.severity,
+                      "matched": (result.matched_content or "")[:400]}
+            title = f"安全基线不合规[{rule.name}] device={device_id}"
+            if active:
+                AlertEvent.objects.filter(pk=active.pk).update(
+                    fired_count=active.fired_count + 1, title=title[:255],
+                    detail=detail, last_fired_at=timezone.now())
+                return "updated"
+            AlertEvent.objects.create(
+                dedup_key=key, device_id=device_id, rule_id=rule.id,
+                severity=rule.severity, title=title[:255], detail=detail, status="firing")
+            return "opened"
+        if active:
+            AlertEvent.objects.filter(pk=active.pk).update(
+                status="resolved", resolved_at=timezone.now())
+            return "resolved"
+    except Exception:
+        logger.exception("baseline alert sync failed rule=%s device=%s", rule.id, device_id)
+    return None
+
+
+def run_baseline(rule_ids=None, device_ids=None):
+    """安全基线核查：每设备最新备份 × 每条规则 → 结果留痕 + 不合规联动告警。
+
+    rule.scope（device_ids/driver_types/regions）生效；device_ids 参数额外限定设备。
+    返回 {checked, devices, violations, by_rule, alerts_opened/updated/resolved, ts}。
+    """
     from apps.ncm.models import BaselineCheckResult, BaselineRule, ConfigBackup
-    results = []
-    rules = BaselineRule.objects.filter(pk__in=rule_ids) if rule_ids else BaselineRule.objects.all()
-    # 修复：setdefault 首见即最新（order_by -created_at）
+    rules = list(BaselineRule.objects.filter(pk__in=rule_ids)
+                 if rule_ids else BaselineRule.objects.all())
     backups = {}
     for b in ConfigBackup.objects.order_by("-created_at"):
-        backups.setdefault(b.device_id, b)
+        backups.setdefault(b.device_id, b)   # setdefault 首见即最新
+    dev_ids = sorted(set(backups) - {None})
+    if device_ids:
+        wanted = set(int(x) for x in device_ids)
+        dev_ids = [d for d in dev_ids if d in wanted]
+    meta = _device_meta(dev_ids)
+    checked = violations = compliant_n = opened = updated = resolved = 0
+    viol_rows, by_rule = [], []
     for rule in rules:
-        for dev_id, backup in backups.items():
-            hit_lines = [l for l in (backup.content or "").splitlines() if re.search(rule.pattern, l)]
+        rule_viol = 0
+        for dev_id in dev_ids:
+            if not _in_scope(rule, meta.get(dev_id), dev_id):
+                continue
+            content = backups[dev_id].content or ""
+            hit_lines = [l for l in content.splitlines() if re.search(rule.pattern, l)]
             ok = bool(hit_lines) if rule.rule_type == "must_present" else not hit_lines
-            results.append(BaselineCheckResult.objects.create(
+            res = BaselineCheckResult.objects.create(
                 rule=rule, device_id=dev_id, compliant=ok,
-                matched_content="\n".join(hit_lines[:20])))
-    return len(results)
+                matched_content="\n".join(hit_lines[:20]))
+            act = _sync_baseline_alert(rule, dev_id, res)
+            opened += act == "opened"; updated += act == "updated"; resolved += act == "resolved"
+            checked += 1
+            if ok:
+                compliant_n += 1
+            else:
+                violations += 1; rule_viol += 1
+                if len(viol_rows) < 50:
+                    m = meta.get(dev_id) or {}
+                    viol_rows.append({"rule_id": rule.id, "rule_name": rule.name,
+                                      "severity": rule.severity, "device_id": dev_id,
+                                      "device_name": m.get("name"), "result_id": res.id})
+        if rule_viol:
+            by_rule.append({"rule_id": rule.id, "rule_name": rule.name,
+                            "severity": rule.severity, "violations": rule_viol})
+    return {"checked": checked, "devices": len(dev_ids), "compliant": compliant_n,
+            "violations": violations, "by_rule": by_rule[:20], "violation_rows": viol_rows,
+            "alerts_opened": opened, "alerts_updated": updated, "alerts_resolved": resolved,
+            "ts": str(timezone.now())}

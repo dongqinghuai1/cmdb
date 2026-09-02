@@ -1,6 +1,6 @@
 # 交接文档（面向下一个开发智能体）
 
-> 最后更新：M2026-09-18b（值班排班 DutySchedule API，见文末 §33）。
+> 最后更新：M2026-09-19（安全基线闭环，见文末 §34）。
 > 一期+二期已完成并实测通过；三期「自动化运维」（M2026-09-02）、「轻量事件单」（M2026-09-02b）、「轻量变更单」（M2026-09-02c）、「CMDB 基础补齐 R1/R2/R3」（M2026-09-03/03b/03c）、「资产生命周期」（M2026-09-03d）已上线，见文末里程碑。
 > 读完本文 + DEPLOY.md + DEVELOPMENT.md 即可接手。
 
@@ -38,7 +38,7 @@
 ## 3. 待办清单（按 PRD 路线图）
 
 **二期**：syslog 接收+日志检索、NCM 配置备份/diff、拓扑(~~LLDP 自动发现~~ ✅M2026-09-17；G6 手工布局保存待办)、AP 台账同步、告警收敛/静默(~~占用静默+复燃窗口合并~~ ✅M2026-09-18；根因抑制/变更窗口自动静默待)、IPAM、飞书 SSO、Prometheus remote_write、路由快照采集（~~change_ticket 轻量变更单~~ ✅ 已于三期补齐，见 M2026-09-02c）
-**三期**：~~自动化运维~~ ✅、~~轻量事件单~~ ✅、~~轻量变更单(二期欠账)~~ ✅、~~线缆与 LLDP 比对~~ ✅（M2026-09-17）、固件升级/值班(~~值班排班 DutySchedule API~~ ✅M2026-09-18b；固件升级计划待)；剩余：安全基线、资产生命周期+保修/借用、报表中心、PDU 电源、虚机 vCenter 同步
+**三期**：~~自动化运维~~ ✅、~~轻量事件单~~ ✅、~~轻量变更单(二期欠账)~~ ✅、~~线缆与 LLDP 比对~~ ✅（M2026-09-17）、固件升级/值班(~~值班排班 DutySchedule API~~ ✅M2026-09-18b；固件升级计划待)、~~安全基线~~ ✅（M2026-09-19）；剩余：资产生命周期+保修/借用、报表中心、PDU 电源、虚机 vCenter 同步
 **四期**：AI（LLM 网关已留 settings.LLM_*、NL2Query、根因分析、ChatOps 飞书机器人、RAG）
 **技术债**：ai/report 骨架 app 补全；巡检只实现了 2 种检查类型（online 状态/接口错包阈值）；collect_shard 需要真实 SNMP 设备联调；audit_log/log_record/login_event 分区表转换（ER D12）；事件单超时仅时间线提醒（飞书/升级未接）
 
@@ -78,6 +78,7 @@
 | **verify_topo_lldp.py** | **拓扑自动发现+线缆/LLDP 比对：LLDP-MIB 解析纯函数 / mock 发现落邻居+远端回填+构图 / 比对三态(确认·mismatch·自动补录) / 幂等 / 权限负例 / purge 清理孤儿** | **22 PASS（sqlite 与容器 PG 各一遍）** |
 | **verify_alert_converge.py** | **告警收敛/静默增强：借出自动静默+归还释放 / 占用期不触发 / 窗口内复燃合并同一事件(不重开) / 窗口0复燃新建事件 / 手动评估与 resolve 时间戳 / 权限负例 / purge 清事件孤儿(保留被事件单引用)** | **18 PASS（sqlite 与容器 PG 各一遍）** |
 | **verify_duty.py** | **值班排班 DutySchedule API：view/edit 双码门禁 / 排班 CRUD / 同人同日同班次重复 400 / 日历视图(月聚合主备班) / 交班置时间戳 / 审计链 / 清理幂等** | **19 PASS（sqlite 与容器 PG 各一遍）** |
+| **verify_baseline.py** | **安全基线闭环：规则库 seed(5 条) / scope(驱动·设备)生效 / 全规则核查统计 / 违规联动告警 / 修复即自动恢复 / 汇总端点 / purge 清 NCM 孤儿 / 权限负例** | **15 PASS（sqlite 与容器 PG 各一遍）** |
 | smoke_test.py | 端口级冒烟（登录->建柜->上架->冲突） | 10 PASS |
 | seed_demo.py | 演示数据：2 地区/2 机房/3 机柜/10 设备 | 幂等 |
 | seed_floorplan.py | 上海机房平面图示例布局 | 幂等 |
@@ -491,3 +492,16 @@
 - **权限**：新增功能码 `system.duty.view/edit`（init_nops_data 幂等种子 + sys_admin 角色授予；net_ops/auditor 不授）。读可看、写需 edit：sys_demo 可读写、net_demo/auditor 全 403 负例覆盖。审计沿用 BaseModelViewSet 自动落 + handoff 显式落。
 - **验证**：`scripts/verify_duty.py` **19 PASS ×2**（sqlite/容器 PG）：双码门禁（read 正负例 ×4）→ 排班/重复 400/备班 → sys_demo 写正例 + net_demo 403 → 日历 31 天与主备班呈现 → 交班时间戳 + 无权限 403 → 更新门禁 → DutySchedule 审计链 ≥2 → 清理无残留（脚本预清理保证幂等重跑）。
 - **待办/坑**：① region 是跨 App FK（ER 既定），写入传 dcim region id；② 尚未接"告警升级/escalate 到当班人"——升级动作目标应是当日 primary 值班人（alert escalation 通道待接，见 M32 待办）；③ 固件升级计划（FirmwareUpgradePlan 表 + 升级执行/回滚编排 + 与变更单/值班联动）为本项另一半，另起里程碑；④ 值班日历前端（排班视图/交接按钮）待接（前端路由+菜单 code menu.sysadmin 已有）。
+
+---
+
+## 34. 里程碑 M2026-09-19：安全基线闭环（规则库预置 + scope 生效 + 不合规告警 + 周期核查）
+
+- **范围**：ncm 域基线从"半成品"（BaselineRule/BaselineCheckResult + 无 scope、无预置、无告警、无周期）补成闭环：核查对象=各设备**最新 ConfigBackup**（沿用加密库内存储，不新增采集），核查结果→AlertEvent，修复即自动恢复。
+- **规则库预置**：迁移 `ncm.0002` seed 5 条加固规则（禁止明文 Telnet / 禁止默认 SNMP 团体 / 启用会话空闲超时 / 禁止明文 HTTP 管理面 / 口令加密存储，跨厂商命令形态按行正则）；`0003` 修复首版把跨行字符串拼接误写成 `\n` 导致正则永不匹配的问题（幂等覆盖既有库）。
+- **scope 生效** `ncm/services.py::run_baseline(rule_ids, device_ids)` 重写：`rule.scope` 支持 `device_ids / driver_types / regions` 三类过滤（空 scope=全量），body 的 `device_ids` 可额外限定；每 (规则×设备) 仅在有最新备份的存活设备上生成结果行并留痕。设备元信息函数内导入 `apps.cmdb.models.Device`（仓库先例，跨域不建 FK）。
+- **告警联动** `_sync_baseline_alert`：违规 → 开/续 AlertEvent（dedup `{device}:baseline:{rule}`，severity 取规则、detail 含结果与命中片段）；合规 → 自动置 resolved+resolved_at。核查任务 `ncm.baseline_check`（beat **每日 06:30**，全量跑）——不合规自动上告警中心，修复后自愈，无需人工关单。
+- **端点**：`POST /ncm/baseline-rules/check/` 返回完整统计 `{checked, devices, compliant, violations, by_rule, violation_rows, alerts_*}`（兼容旧 `checked`）；新增 `GET /ncm/baseline-results/summary/` 合规总览（每 (规则×设备) 取最新 → 按规则聚合 checked/compliant/violations）。
+- **配套**：设备 purge 扩展清理 NCM 域裸外键残留 `ConfigBackup / ConfigChangeEvent / BaselineCheckResult`（与 LLDP 邻居、AlertEvent 同规则，防孤儿堆积）。
+- **验证**：`scripts/verify_baseline.py` **15 PASS ×2**（sqlite/容器 PG）：seed 规则在位 → 造 h3c/fortigate 设备+导入含 public 团体/telnet 的坏配置 → 核查统计与违规明细含 Telnet/SNMP 规则 → 告警 firing 开 → 修复导入后自动 resolved + compliant → driver/device 两类 scope 只查目标设备 → summary 结构 → purge 后事件/备份/结果孤儿清零 → auditor 负例。回归：verify_ncm 8、api_test 33（PG）保持。
+- **待办/坑**：① seed 规则为通用网络设备加固集，生产可按厂商/型号细化并用 scope 定向（driver_types/device_ids）；② 周期核查任务依赖有配置备份的设备，备份频率目前仅每日 02:30 一次——基线严格度受备份新鲜度上限约束；③ 违规告警暂不主动推送渠道（事件已入中心、可走既有升级/转单），如需飞书即时提醒接 M32 通知链；④ 基线"历史曲线"（规则×设备违规随时间趋势）与前端合规页(按规则下钻设备清单)待做。
