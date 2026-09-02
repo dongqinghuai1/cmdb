@@ -52,4 +52,6 @@ app.conf.beat_schedule = {
     "cmdb-link-quality-sample": {"task": "cmdb.sample_link_quality", "schedule": 300.0},
     # SNMP 采集（10 分钟一次 → 接口状态/错误；无线 9800 适配待校准）
     "cmdb-snmp-collect": {"task": "cmdb.snmp_collect", "schedule": 600.0},
+    # Prometheus 只读消费（5 分钟一次 → 写 DeviceInterfaceStat；NOPS_PROM_URL 缺省跳过）
+    "cmdb-prom-poll": {"task": "cmdb.prom_poll", "schedule": 300.0},
 }

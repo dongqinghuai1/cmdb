@@ -443,3 +443,14 @@
 - **逻辑**（apps/cmdb/snmp.py）：`upsert_interfaces` 留存 octets/errors 快照与采样时刻；下次采样 delta≥0 时算 `in_bps/out_bps`（计数器回绕或减小则跳过保持原值）；响应附各接口当前 `rates`。mock 行支持 `octets_step`（制造可控增量用于回归）。
 - **验证**：`scripts/verify_snmp.py` 升至 **8 PASS** ×2：二次采样（step=2000）速率>0 且 octets 快照累积、三次同值 delta=0 速率归零、既有 BER/权限/幂等/无凭据用例全绿。
 - **坑**：同值采样 delta=0 显式写 0 归零（负 delta=回绕不动作）；elapsed 过短会使速率数值偏大（真实周期为 beat 10 分钟固定、稳定）。下一步：`cmdb.snmp_collect` 成功后顺带触发 `sample_link_quality`，或由每 5 分钟取样任务独立消费 stat —— 曲线即有真实源。
+
+---
+
+## 30. 里程碑 M2026-09-16：Prometheus 接入（用户生产已有 Prometheus+snmp_exporter+规则+Grafana）
+
+- **架构结论（对齐用户现状）**：采集层留在 Prometheus/snmp_exporter，nops **只做只读消费与资产上下文**——不再自建周期 SNMP 主采集。`snmp.py` 直采降级为"探针/校准工具 + 无 Prometheus 环境的回退"（beat 任务保留但默认无目标跳过）。
+- **消费侧** `apps/cmdb/prometheus.py`：PromQL `/api/v1/query` 只读拉取（urllib，Bearer token）→ 按查询表（`NOPS_PROM_QUERIES` JSON 覆盖，内置 node_network 模板）关联 CMDB 设备（instance IP→manage_ip / device→name）→ 写 `DeviceInterfaceStat`（复用 360°/链路质量/Network 展示，stat 由既有 5min 取样消费出曲线）。语义白名单：in_bps/out_bps。
+- **任务** `cmdb.prom_poll`（beat 5min；`NOPS_PROM_URL` 缺省返回 skipped 不打扰）。
+- **告警贯通** `POST /alerts/webhook/prometheus/`（Alertmanager webhook → `AlertEvent`）：`NOPS_PROM_WEBHOOK_TOKEN` 配置时校验 `X-Webhook-Token`；labels.instance IP 命中 CMDB 设备、未命中 device_id=0（未关联哨兵）；firing 同 key(alertname+instance) 去重递增 `fired_count`，resolved 关闭对应 active 事件——事件可继续走既有"一键转事件单"动作。容器 `.env` 注入 token 演示值 testtok（文件已 gitignore）。
+- **验证**：`scripts/verify_prom.py` **10 PASS ×2**（sqlite/容器 PG）：只读触发 403；mock 拉取写 stat（1234000/567000）；未配 URL 400 提示；webhook created/同 key updated/未命中设备落 0/错误 token 403/resolved 关闭/落库可见。worker 日志确认 `cmdb.prom_poll` 注册。
+- **待办/坑**：① 查询模板按你方 exporter 标签需校准（node_network 为默认示例，可 NOPS_PROM_QUERIES 全量覆盖——无线走 snmp_exporter 思科 MIB 后亦在此表加查询即可，9800 校准接缝自动消失）；② webhook 未做 notification 渠道推送（事件已入 AlertEvent，飞书转发复用现有通道机制后续）；③ 只写首接口 stat（ifIndex 最小）——按 query labels 对齐接口名（interface/ifName）映射为后续。④ prom_poll 单次失败记 error 不告警；⑤ AlertEvent.device_id 未命中用 0，查询未关联事件需过滤。

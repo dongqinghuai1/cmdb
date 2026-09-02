@@ -883,6 +883,34 @@ class DeviceViewSet(BaseModelViewSet):
                     source_ip=request.META.get("REMOTE_ADDR", ""))
         return Response(r)
 
+    @action(detail=True, methods=["post"], url_path="prom-test")
+    def prom_test(self, request, pk=None):
+        """Prometheus 接入单测/手动触发：body {mock:0|1}（默认 1 走内置样例；
+        mock=0 需服务端已配 NOPS_PROM_URL/TOKEN，按模板查询拉真实指标）。
+        execute 权限 + audit。"""
+        _need_execute(request.user)
+        dev = self.get_object()
+        mock = str(request.data.get("mock", 1)) not in ("0", "false", "False")
+        from apps.cmdb import prometheus as prom_mod
+        if mock:
+            r = prom_mod.collect_mock(dev)
+        else:
+            import os
+            base = (os.getenv("NOPS_PROM_URL") or "").strip()
+            if not base:
+                return Response({"detail": "服务端未配置 NOPS_PROM_URL（演示请用 mock=1）"},
+                                status=400)
+            try:
+                r = prom_mod.poll_once(base, os.getenv("NOPS_PROM_TOKEN") or "")
+            except ValueError as e:
+                return Response({"detail": str(e)}, status=400)
+            r = {**r, "target": base}
+        from common.audit import write_audit
+        write_audit(request.user, "execute", "PromPoll", dev.pk,
+                    after={**r, "action": "prom-test", "mock": mock},
+                    source_ip=request.META.get("REMOTE_ADDR", ""))
+        return Response(r)
+
 
 class DeviceGroupViewSet(BaseModelViewSet):
     queryset = DeviceGroup.objects.all()

@@ -45,3 +45,19 @@ def snmp_collect_task():
             res.append({"device_id": d.pk, "name": d.name, "error": str(e)[:200]})
     return {"targets": ok + skipped, "ok": ok, "skipped": skipped, "errors": errors,
             "detail": res[:20]}
+
+
+@shared_task(name="cmdb.prom_poll")
+def prom_poll_task():
+    """Prometheus 只读消费（beat 每 5 分钟）：NOPS_PROM_URL 未配置则跳过。
+    拉取 PromQL → 关联 CMDB 设备 → 写 DeviceInterfaceStat（复用现有展示/取样）。"""
+    import os
+    base = (os.getenv("NOPS_PROM_URL") or "").strip()
+    if not base:
+        return {"skipped": True, "reason": "NOPS_PROM_URL 未配置（SNMP 直采为回退）"}
+    from apps.cmdb import prometheus as prom_mod
+    try:
+        stats = prom_mod.poll_once(base, os.getenv("NOPS_PROM_TOKEN") or "")
+        return {"skipped": False, **stats}
+    except Exception as e:  # noqa: BLE001 —— 接入失败不拖垮 beat
+        return {"skipped": False, "error": str(e)[:300]}

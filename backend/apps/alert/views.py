@@ -101,3 +101,63 @@ class AlertEventViewSet(viewsets.ModelViewSet):
             raise ValidationError(str(e))
         return Response({"incident_id": res["id"], "ticket_no": res["ticket_no"],
                          "status": res["status"]}, status=201)
+
+
+from rest_framework.decorators import (api_view, authentication_classes,  # noqa: E402
+                                       permission_classes)
+from rest_framework.permissions import AllowAny  # noqa: E402
+
+
+@api_view(["POST"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def prometheus_webhook(request):
+    """Alertmanager webhook → AlertEvent（监控贯通）。
+
+    鉴权：若服务端配置 NOPS_PROM_WEBHOOK_TOKEN，则请求头 X-Webhook-Token 必须一致；
+    设备关联：labels.instance 的 IP 匹配 CMDB manage_ip，未命中 device_id=0(未关联)；
+    firing 去重(alertname+instance)递增 fired_count；resolved 关闭对应 active 事件。
+    """
+    import os
+
+    from django.utils import timezone
+
+    from apps.cmdb.models import Device
+    token = (os.getenv("NOPS_PROM_WEBHOOK_TOKEN") or "").strip()
+    if token and request.headers.get("X-Webhook-Token") != token:
+        return Response({"detail": "bad token"}, status=403)
+    payload = request.data or {}
+    created = updated = resolved = 0
+    for alert in payload.get("alerts") or []:
+        labels = alert.get("labels") or {}
+        ann = alert.get("annotations") or {}
+        name = labels.get("alertname") or "prometheus"
+        inst = str(labels.get("instance") or "").split(":")[0]
+        dev = Device.objects.filter(manage_ip=inst, deleted_at__isnull=True).first()
+        device_id = dev.pk if dev else 0
+        dedup = f"{device_id}:prom:{name}:{inst}"
+        severity = (labels.get("severity") or "warning")[:8]
+        ev = (AlertEvent.objects.filter(dedup_key=dedup, status="firing")
+              .order_by("-id").first())
+        if (alert.get("status") or "firing") == "resolved":
+            if ev:
+                ev.status = "resolved"
+                ev.resolved_at = timezone.now()
+                ev.save(update_fields=["status", "resolved_at", "updated_at"])
+                resolved += 1
+            continue
+        title = ann.get("summary") or f"[{name}] {inst}"
+        if ev:
+            ev.fired_count += 1
+            ev.title = title[:255]
+            ev.detail = {"labels": labels, "annotations": ann}
+            ev.save(update_fields=["fired_count", "title", "detail", "updated_at"])
+            updated += 1
+        else:
+            AlertEvent.objects.create(
+                dedup_key=dedup, device_id=device_id, severity=severity,
+                title=title[:255], detail={"labels": labels, "annotations": ann},
+                status="firing")
+            created += 1
+    return Response({"ok": True, "created": created, "updated": updated,
+                     "resolved": resolved})
