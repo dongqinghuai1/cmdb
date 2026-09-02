@@ -420,3 +420,16 @@
 - **前端**：DcimOps 完成按钮 toast 提示落位结果（「已完成并落位 U1-2U」/「已下架出柜」）。
 - **验证**：`scripts/verify_dcimplace.py` 12 PASS ×2（sqlite/容器 PG，viewer_pg 兜底只读验证）：自建 区域/站点/机柜 链（sqlite 无 demo 数据）、上架完成落位断言、同区冲突 400 且工单保持 doing/设备未占位、改空 U 区完成、下架清位、全量清理。
 - **待办/坑**：① 完成即落位需要 u_from（无 U 目标的迁移工单无法完成——作业流要求先定 U）；② 落位冲突后工单停在 doing 需人工改 U 重试，未做自动推荐可用 U 段；③ RackReservation 预留段同样参与冲突（预期行为：预留可挡住误上架）。
+
+---
+
+## 28. 里程碑 M2026-09-14：SNMP 采集驱动（标准 IF-MIB 通用层 + Cisco 9800 无线适配接缝）
+
+- **范围**：设备自动采集第一块真板——纯 Python SNMPv2c 走查（**无第三方依赖**，stdlib socket），通用 IF-MIB 接口发现/状态/错误落库；Catalyst 9800 无线 MIB 适配为"待校准接缝"（未校准不写假数据、响亮报错）。
+- **文件**：
+  - `apps/cmdb/snmp.py`：BER 编解码（GETNEXT 请求/响应 TLV 解析，整型/计数/时间戳/字符串/OID）→ `snmpwalk()`；`parse_if_mib()` 语义映射；`upsert_interfaces()` 落 DeviceInterface(+Stat 错误计数)；`WLC9800_AP_OIDS`（KEY→OID 待填）+ `collect_aps_9800()` 校准前抛 `RequiresCalibration`；
+  - `tasks.py::cmdb.snmp_collect`（遍历绑定 snmp_v2c 凭据设备，单设备失败不拖垮；beat 每 10 分钟）；
+  - DeviceViewSet action `POST /cmdb/devices/{id}/snmp-test/`：body {mock:0|1}（**默认 mock=1 防误触真实网络**）；mock=0 需设备 credential_id 指向 snmp_v2c Credential（复用已有 Credential 模型 snmp_v2c/secret 加密字段、params.port），execute 权限 + audit。
+- **验证**：`scripts/verify_snmp.py` 7 PASS ×2（sqlite/容器 PG）：**本地 UDP mock SNMP 服务器真走查**——BER 收发按序返回表数据并正确解码 octet/int/counter、表尾 err 停止；只读触发 403；mock 采集创建 3 接口幂等；真实采集无凭据 400 提示。worker 日志确认 `cmdb.snmp_collect` 注册。
+- **Cisco 9800L 无线落地路径（等一次样本）**：在可达 WLC 的主机跑 `snmpwalk -v2c -c <ro团体> <WLC_IP> 1.3.6.1.4.1.9.9.429`（AIRESPACE-WIRELESS-MIB 根），把输出贴我 → 补填 `WLC9800_AP_OIDS`（ap_name/mac/model/ip/channel/tx_power/clients）→ 复用现有 WirelessApInfo + tech-parse 展示链；SNMP v1/v3 与 trap 监听为后续。
+- **待办/坑**：① 每设备错误只记录不重试退避（后续接告警）；② 计数器为存量快照（octets delta→bps 的差值计算需连续两次采样差/秒——与 LinkQualitySample 打通即速率曲线，已列下一步）；③ ifTable 名称列可能与现有 stat 采集命名不一致（upsert 按 device+name 幂等，需设备侧对齐 if_name 规范）。

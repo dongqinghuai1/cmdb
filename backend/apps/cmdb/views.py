@@ -852,6 +852,36 @@ class DeviceViewSet(BaseModelViewSet):
                     source_ip=request.META.get("REMOTE_ADDR", ""))
         return Response(r)
 
+    @action(detail=True, methods=["post"], url_path="snmp-test")
+    def snmp_test(self, request, pk=None):
+        """SNMP 采集单测/手动触发：body {mock: 0|1}（默认 1 防误触真网络；
+        mock=0 需设备已绑定 snmp_v2c 凭据）。execute 权限 + audit。"""
+        _need_execute(request.user)
+        dev = self.get_object()
+        mock = str(request.data.get("mock", 1)) not in ("0", "false", "False")
+        from apps.cmdb import snmp as snmp_mod
+        if mock:
+            r = snmp_mod.collect(dev, profile="if-mib", mock=True)
+        else:
+            from apps.system.models import Credential
+            cred = (Credential.objects.filter(pk=dev.credential_id)
+                    .filter(cred_type__startswith="snmp").first() if dev.credential_id else None)
+            if not cred:
+                return Response({"detail": "设备未绑定 SNMP 凭据（需 Credential 类型 snmp_* 且设备 credential_id 指向它）"},
+                                status=400)
+            if cred.cred_type != "snmp_v2c":
+                return Response({"detail": "当前仅支持 SNMPv2c（v1/v3 待接入）"}, status=400)
+            try:
+                r = snmp_mod.collect(dev, mock=False, community=cred.secret,
+                                     port=(cred.params or {}).get("port") or 161)
+            except ValueError as e:
+                return Response({"detail": str(e)}, status=400)
+        from common.audit import write_audit
+        write_audit(request.user, "execute", "SnmpCollect", dev.pk,
+                    after={**r, "action": "snmp-test", "mock": mock},
+                    source_ip=request.META.get("REMOTE_ADDR", ""))
+        return Response(r)
+
 
 class DeviceGroupViewSet(BaseModelViewSet):
     queryset = DeviceGroup.objects.all()
