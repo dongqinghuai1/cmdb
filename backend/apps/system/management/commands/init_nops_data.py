@@ -23,6 +23,8 @@ class Command(BaseCommand):
             ("system.token.view", "API Token", "系统管理", "view"),
             ("system.duty.view", "值班排班查看", "系统管理", "view"),
             ("system.duty.edit", "值班排班编辑", "系统管理", "edit"),
+            ("system.sso.view", "飞书 SSO 查看", "系统管理", "view"),
+            ("system.sso.edit", "飞书 SSO 配置/同步", "系统管理", "edit"),
             ("dcim.region.view", "机房查看", "机房管理", "view"),
             ("dcim.rack.view", "机柜查看", "机房管理", "view"),
             ("dcim.rack.edit", "机柜编辑", "机房管理", "edit"),
@@ -98,7 +100,7 @@ class Command(BaseCommand):
             "monitor.collector.view", "monitor.log.view",
             "alert.event.view", "alert.rule.view", "inspect.template.view", "inspect.run.view",
             "automate.script.view", "automate.run.view", "change.incident.view",
-            "system.duty.view", "system.duty.edit",
+            "system.duty.view", "system.duty.edit", "system.sso.view", "system.sso.edit",
             "report.snapshot.view", "report.snapshot.edit",
         ], ["menu.home", "menu.monitor", "menu.asset", "menu.dcim", "menu.workflow", "menu.log"])
         _persona("dcim_admin", "机房运维", [

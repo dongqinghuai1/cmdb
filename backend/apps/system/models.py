@@ -158,3 +158,30 @@ class WebhookSubscription(TimeStampedModel):
     secret = EncryptedTextField(null=True, blank=True)
     enabled = models.BooleanField(default=True)
     created_by = models.ForeignKey(User, null=True, on_delete=models.SET_NULL)
+
+
+class FeishuApp(TimeStampedModel):
+    """飞书自建应用（SSO/组织同步源）。app_secret 加密落库、序列化不回显。
+
+    - mock_mode=True：演练身份交换/组织样例（离线可验证全链路，不触网）；
+    - mock_mode=False：真实 OAuth 需 app_id/app_secret 就绪且能达 open.feishu.cn；
+      依赖/凭据未就绪时主动 raise RequiresCalibration（不写假数据，纪律同 SNMP/PDU）。
+    - auto_provision：SSO 首次登录自动建号（username 去重、绑定 profile.feishu_unionid、
+      授予 default_role_id 角色）；关闭则未绑定账号登录返回 403 待管理员开通。
+    """
+    name = models.CharField(max_length=64, unique=True)
+    app_id = models.CharField(max_length=128)
+    app_secret = EncryptedTextField(null=True, blank=True)
+    enabled = models.BooleanField(default=True)
+    mock_mode = models.BooleanField(default=False)
+    auto_provision = models.BooleanField(default=True)
+    default_role_id = models.BigIntegerField(null=True, blank=True)
+    last_sync_at = models.DateTimeField(null=True, blank=True)
+    remark = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ["id"]
+        verbose_name = "飞书应用(SSO)"
+
+    def __str__(self):
+        return self.name

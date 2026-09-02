@@ -1,8 +1,8 @@
 from rest_framework import serializers
 
 from apps.system.models import (ApiToken, AuditLog, Credential, DutySchedule,
-                                NotifyChannel, OrgDept, Permission, Role,
-                                RoleDataScope, SystemConfig, UserProfile)
+                                FeishuApp, NotifyChannel, OrgDept, Permission,
+                                Role, RoleDataScope, SystemConfig, UserProfile)
 
 
 class LoginSerializer(serializers.Serializer):
@@ -108,3 +108,29 @@ class DutyScheduleSerializer(serializers.ModelSerializer):
 
     def get_region_name(self, o):
         return getattr(o.region, "name", None)
+
+
+class FeishuAppSerializer(serializers.ModelSerializer):
+    app_secret = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    default_role_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = FeishuApp
+        fields = ["id", "name", "app_id", "app_secret", "enabled", "mock_mode",
+                  "auto_provision", "default_role_id", "default_role_name",
+                  "last_sync_at", "remark", "created_at"]
+        read_only_fields = ["last_sync_at"]
+
+    def get_default_role_name(self, o):
+        if not o.default_role_id:
+            return ""
+        from apps.system.models import Role
+        return (Role.objects.filter(pk=o.default_role_id).values_list("name", flat=True).first()) or ""
+
+    def validate_default_role_id(self, v):
+        if v is None:
+            return v
+        from apps.system.models import Role
+        if not Role.objects.filter(pk=v).exists():
+            raise serializers.ValidationError("default role not found")
+        return v

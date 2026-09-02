@@ -1,6 +1,6 @@
 # 交接文档（面向下一个开发智能体）
 
-> 最后更新：M2026-09-23（vCenter 虚机同步，见文末 §39）。
+> 最后更新：M2026-09-23b（飞书 SSO，见文末 §40）。
 > 一期+二期已完成并实测通过；三期「自动化运维」（M2026-09-02）、「轻量事件单」（M2026-09-02b）、「轻量变更单」（M2026-09-02c）、「CMDB 基础补齐 R1/R2/R3」（M2026-09-03/03b/03c）、「资产生命周期」（M2026-09-03d）已上线，见文末里程碑。
 > 读完本文 + DEPLOY.md + DEVELOPMENT.md 即可接手。
 
@@ -37,7 +37,7 @@
 
 ## 3. 待办清单（按 PRD 路线图）
 
-**二期**：syslog 接收+日志检索、NCM 配置备份/diff、拓扑(~~LLDP 自动发现~~ ✅M2026-09-17；G6 手工布局保存待办)、AP 台账同步、~~告警收敛/静默~~ ✅（占用静默+复燃合并 M2026-09-18 / 根因抑制+变更窗口自动静默 M2026-09-21）、IPAM、飞书 SSO、Prometheus remote_write、路由快照采集（~~change_ticket 轻量变更单~~ ✅ 已于三期补齐，见 M2026-09-02c）
+**二期**：syslog 接收+日志检索、NCM 配置备份/diff、拓扑(~~LLDP 自动发现~~ ✅M2026-09-17；G6 手工布局保存待办)、AP 台账同步、~~告警收敛/静默~~ ✅（占用静默+复燃合并 M2026-09-18 / 根因抑制+变更窗口自动静默 M2026-09-21）、IPAM、~~飞书 SSO~~ ✅（M2026-09-23b）、Prometheus remote_write、路由快照采集（~~change_ticket 轻量变更单~~ ✅ 已于三期补齐，见 M2026-09-02c）
 **三期**：~~自动化运维~~ ✅、~~轻量事件单~~ ✅、~~轻量变更单(二期欠账)~~ ✅、~~线缆与 LLDP 比对~~ ✅（M2026-09-17）、~~固件升级/值班~~ ✅（值班 M2026-09-18b / 固件升级编排 M2026-09-20）、~~安全基线~~ ✅（M2026-09-19）、~~报表中心~~ ✅（M2026-09-22）、~~PDU 电源~~ ✅（M2026-09-22b）、~~虚机 vCenter 同步~~ ✅（M2026-09-23）；剩余：资产生命周期+保修/借用
 **四期**：AI（LLM 网关已留 settings.LLM_*、NL2Query、根因分析、ChatOps 飞书机器人、RAG）
 **技术债**：ai/report 骨架 app 补全；巡检只实现了 2 种检查类型（online 状态/接口错包阈值）；collect_shard 需要真实 SNMP 设备联调；audit_log/log_record/login_event 分区表转换（ER D12）；事件单超时仅时间线提醒（飞书/升级未接）
@@ -84,6 +84,7 @@
 | **verify_report.py** | **报表中心：四类型快照手动生成幂等(同日同类型仅一份) / latest 看板 / 订阅 CRUD+立即 run+overview / 非法类型400 / 权限正负例** | **21 PASS（sqlite 与容器 PG 各一遍）** |
 | **verify_power.py** | **PDU 电源：snmp.collect_pdu mock 走查纯函数(2 输出口) + 真实模板 raise / 建 PDU 设备(额定 3000/2400W) / mock 轮询写实测 / 汇总(利用率=实测÷额定 82.7%/103.3%、总功率、≥80% 超阈值) / 改额定后重采样回落 / 读门与轮询写门 / purge 联动清样本** | **15 PASS（sqlite 与容器 PG 各一遍）** |
 | **verify_vcenter.py** | **vCenter 虚机同步：源 CRUD(secret 加密不回显) / mock 同步 → Device(虚机 vm_source=vcenter:pk + vm_uuid 幂等) / 二次同步幂等 / 收敛软删+复活 / 真实模式校准提示不写假数据 / 权限正负例 / 删源保留虚机记录** | **14 PASS（sqlite 与容器 PG 各一遍）** |
+| **verify_feishu.py** | **飞书 SSO：未配置 400 / 授权跳转 URL(client_id+redirect+state) / mock 回调自动建号(unionid 绑定+默认角色) 发 JWT 且 /auth/me/ 可访问 / 同 union 重复回调不重号 / 关闭自动开通 403 / 组织通讯录同步幂等(部门树+用户) / 权限正负例 / 清理** | **19 PASS（sqlite 与容器 PG 各一遍）** |
 | smoke_test.py | 端口级冒烟（登录->建柜->上架->冲突） | 10 PASS |
 | seed_demo.py | 演示数据：2 地区/2 机房/3 机柜/10 设备 | 幂等 |
 | seed_floorplan.py | 上海机房平面图示例布局 | 幂等 |
@@ -547,6 +548,19 @@
 - **端点** `/cmdb/vmware-sources/` CRUD（cmdb.vmware.edit 门禁，perform_*）+ `POST {id}/sync/`{mock}（真实未就绪返回 calibration 提示）。权限点 cmdb.vmware.view/edit 入 init（net_admin=view、sys_admin=view+edit）。删源**不**级联删虚机（记录保留，purge 才物理清）。
 - **验证**：`scripts/verify_vcenter.py` **14 PASS ×2**（sqlite/PG）：读门 V1-V3/V5 → 建源 V4(secret 不回显) → mock 首轮 created2 V6 → 落库形态(标记/uuid/attrs/电源态) V7 → 二次幂等 V8 → 收窄名单软删 V9 → 恢复复活 V10 → 真实模式校准不落数据 V11 → sync 写门 V12 → 删源保留记录 V13 → purge 清理 V14。回归 api_test 33、verify_report 21（sqlite）保持绿。
 - **待办/坑**：① 真实 pyVmomi 拉取（连通/证书/凭据）在具备 vCenter 环境时按 vcenter.pull real 分支接入并校准，需在 Docker 镜像补 pyVmomi 依赖（当前按"独立执行器优先"注释保留，beat 对校准源自动跳过）；② 宿主机关联（虚机→宿主机 Device.parent_device）与存储/集群透出、快照级"配置漂移"比对待做；③ 前端"虚拟机"列表/来源 badge（vCenter 源 + 最近同步结果）待做，后端就绪。
+
+---
+
+## 40. 里程碑 M2026-09-23b：飞书 SSO + 组织同步（system 域）
+
+- **范围**：飞书二期欠账落地。应用级 SSO（授权跳转 → code 换身份 → unionid 定位/自动建号 → 签发与普通登录一致的 JWT）+ 通讯录组织同步（部门树/用户建档幂等）。复用既有 UserProfile.feishu_unionid / OrgDept.feishu_dept_id（一期预留字段）。
+- **模型**（system.0002_feishuapp）：`FeishuApp`{name 唯一、app_id、app_secret(EncryptedTextField 加密、序列化 write_only)、enabled、mock_mode（演练/离线全链路）、auto_provision（首登自动建号）、default_role_id（建号授默认角色）、last_sync_at}。
+- **服务/端点**（apps/system/feishu.py + views_feishu.py + urls_feishu.py，挂 /api/v1/auth/feishu/）：
+  - `GET login-url/`（公开）：app_id/redirect_uri(自动按请求 origin)/state → open.feishu.cn 授权跳转（无需密钥，真实同用）；
+  - `GET callback/`（公开）：code 换身份 —— mock_mode 确定性样例；真实 OAuth 需 app_secret+可达 open.feishu.cn，未就绪 raise（不写假数据）；建号去重 username、绑定 unionid、授默认角色、审计 login；
+  - `apps/` CRUD + `POST {id}/contacts-sync/`（system.sso.view/edit 门禁）：mock 走部门树+2 用户样例幂等；真实 contact API 未校准前主动提示。权限点 system.sso.view/edit 入 init（sys_admin view+edit；auditor/net 不可见）。
+- **验证**：`scripts/verify_feishu.py` **19 PASS ×2**（sqlite/PG）：F1-F4 未配置/权限门 → F5 建应用(secret 不回显) → F6 跳转 URL → F7-F9 回调建号+JWT+me+同 union 不重号 → F10 第二身份 → F11 关自动开通 403 → F13-F15 通讯录同步幂等+部门落库 → F16-F18 写门负例 → F19 清理。回归 api_test 33（sqlite）、verify_duty 19（PG）保持绿。
+- **待办/坑**：① 真实 OAuth/contact 分支需在具备飞书自建应用（app_id/app_secret + redirect 白名单）环境校准——本地按 mock_mode 全链路演练、未就绪不写假数据；② 组织同步增量（部门删除收敛、手机号/工号映射本地账号合并）与离职禁用待做；③ 登录锁定（login_fail/locked_until 已建字段）与 SSO 联动、前端"飞书登录"按钮/绑定页待做，后端就绪。
 
 ---
 
