@@ -145,6 +145,34 @@
         </el-table>
       </el-card>
     </el-tab-pane>
+
+    <el-tab-pane label="保修到期" name="warranty">
+      <el-card shadow="never">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+          <el-tag v-for="w in WKEYS" :key="w.k" :type="wSel===w.k?'primary':'info'" class="qtag"
+                  @click="pickWarranty(w.k)">
+            {{ w.l }}：{{ wrSummary[w.k] ?? "-" }}
+          </el-tag>
+        </div>
+        <el-table :data="wrRows" size="small" stripe max-height="480"
+                  @row-click="(r) => $router.push('/devices/' + r.id)" style="cursor:pointer">
+          <el-table-column prop="name" label="设备" min-width="130" />
+          <el-table-column label="位置" min-width="150">
+            <template #default="{row}">{{ row.region_name }} / {{ row.site_name }}</template>
+          </el-table-column>
+          <el-table-column prop="vendor" label="品牌" width="90" />
+          <el-table-column prop="hw_model" label="型号" width="120" />
+          <el-table-column prop="warranty_until" label="保修到期" width="120" />
+          <el-table-column label="剩余" width="110">
+            <template #default="{row}">
+              <el-tag size="small" :type="row.days_left < 0 ? 'danger' : row.days_left <= 90 ? 'warning' : 'success'">
+                {{ row.days_left < 0 ? "已过期" + (-row.days_left) + "天" : row.days_left + "天" }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="owner" label="责任人" width="100" />
+        </el-table>
+      </el-card>
+    </el-tab-pane>
   </el-tabs>
 </template>
 
@@ -289,9 +317,32 @@ const openSw = async (row) => {
     (a.sw_version || "~") < (b.sw_version || "~") ? -1 : 1);
 };
 
+// 保修到期
+const WKEYS = [
+  { k: "30", l: "30 天内" }, { k: "60", l: "60 天内" }, { k: "90", l: "90 天内" },
+  { k: "180", l: "180 天内" }, { k: "expired", l: "已过期" },
+];
+const wSel = ref("90");
+const wrSummary = ref({});
+const wrRows = ref([]);
+const allWr = ref([]);
+const loadWarranty = async () => {
+  const r = await api.get("/cmdb/devices/warranty-expiring/", { params: { within_days: 180 } });
+  wrSummary.value = r.summary || {};
+  allWr.value = r.rows || [];
+  pickWarranty(wSel.value);
+};
+const pickWarranty = async (k) => {
+  wSel.value = k;
+  wrRows.value = k === "expired"
+    ? allWr.value.filter((x) => x.days_left < 0)
+    : allWr.value.filter((x) => x.days_left >= 0 && x.days_left <= Number(k));
+};
+
 onMounted(async () => {
   loadGroups();
   loadSw();
+  loadWarranty();
   const [rg, md] = await Promise.all([
     api.get("/dcim/regions/", { params: { page_size: 100 } }),
     api.get("/cmdb/models/", { params: { page_size: 100 } }),

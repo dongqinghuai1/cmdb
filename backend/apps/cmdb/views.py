@@ -10,8 +10,8 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
 from apps.cmdb import storage
-from apps.cmdb.models import (CiModel, CiModelAttr, Device, DeviceAttachment,
-                              DeviceGroup, License, TechSnapshot)
+from apps.cmdb.models import (CiModel, CiModelAttr, Device, DeviceAssetEvent,
+                              DeviceAttachment, DeviceGroup, License, TechSnapshot)
 from apps.cmdb.serializers import (CiModelAttrSerializer, CiModelSerializer,
                                    DeviceGroupSerializer, DeviceSerializer,
                                    DeviceInterfaceSerializer, BusinessSerializer)
@@ -338,6 +338,88 @@ class DeviceViewSet(BaseModelViewSet):
         data = qs.values("vendor", "hw_model", "model__code", "sw_version").annotate(
             c=Count("id"))
         return Response(list(data.order_by("vendor", "hw_model", "-c")))
+
+    # ---------- 资产生命周期（5.5.7 P1：状态机流转 + 资产事件流水） ----------
+    _EVENT_BY_LIFECYCLE = {"purchasing": "purchase", "in_stock": "in_stock",
+                           "deployed": "deploy", "repairing": "repair",
+                           "spare": "spare", "retired": "retire"}
+
+    @action(detail=True, methods=["post"], url_path="lifecycle")
+    def set_lifecycle(self, request, pk=None):
+        _need_edit(request.user)
+        dev = self.get_object()
+        ns = request.data.get("lifecycle_status")
+        if ns not in Device.Lifecycle.values:
+            return Response({"detail": "lifecycle_status 非法"}, status=400)
+        if ns == dev.lifecycle_status:
+            return Response({"detail": "状态未变化"}, status=400)
+        old = dev.lifecycle_status
+        dev.lifecycle_status = ns
+        dev.save(update_fields=["lifecycle_status", "updated_at"])
+        et = (request.data.get("event_type") or self._EVENT_BY_LIFECYCLE.get(ns))
+        if et and et in DeviceAssetEvent.EventType.values:
+            DeviceAssetEvent.objects.create(
+                device_id=dev.pk, event_type=et, occurred_at=timezone.now(),
+                operator_id=request.user.id,
+                counterparty=request.data.get("counterparty") or "",
+                detail={"from": old, "to": ns})
+        from common.audit import write_audit
+        write_audit(request.user, "update", "Device", dev.pk,
+                    before={"lifecycle_status": old}, after={"lifecycle_status": ns},
+                    source_ip=request.META.get("REMOTE_ADDR", ""))
+        return Response({"id": dev.pk, "lifecycle_status": dev.lifecycle_status,
+                         "lifecycle_label": dev.get_lifecycle_status_display()})
+
+    @action(detail=True, methods=["get", "post"], url_path="asset-events")
+    def asset_events(self, request, pk=None):
+        dev = self.get_object()
+        if request.method == "POST":
+            _need_edit(request.user)
+            et = request.data.get("event_type")
+            if et not in DeviceAssetEvent.EventType.values:
+                return Response({"detail": "event_type 非法"}, status=400)
+            occurred = request.data.get("occurred_at")
+            ev = DeviceAssetEvent.objects.create(
+                device_id=dev.pk, event_type=et,
+                occurred_at=occurred or timezone.now(),
+                operator_id=request.user.id,
+                counterparty=request.data.get("counterparty") or "",
+                detail=request.data.get("detail") or {})
+            return Response({"id": ev.id, "event_type": et,
+                             "occurred_at": ev.occurred_at}, status=201)
+        rows = list(dev.asset_events.values(
+            "id", "event_type", "occurred_at", "counterparty", "operator_id", "detail")[:200])
+        from django.contrib.auth import get_user_model
+        uids = {r["operator_id"] for r in rows if r["operator_id"]}
+        names = dict(get_user_model().objects.filter(id__in=uids).values_list("id", "username"))
+        for r in rows:
+            r["operator"] = names.get(r["operator_id"])
+        return Response(rows)
+
+    # ---------- 保修到期提醒（5.5.7 P1：30/60/90/180 + 已过期） ----------
+    @action(detail=False, methods=["get"], url_path="warranty-expiring")
+    def warranty_expiring(self, request):
+        from datetime import date, timedelta
+        today = date.today()
+        days = min(int(request.query_params.get("within_days") or 90), 730)
+        qs = Device.objects.filter(deleted_at__isnull=True, warranty_until__isnull=False)
+        expired_qs = qs.filter(warranty_until__lt=today)
+        expiring = qs.filter(warranty_until__gte=today, warranty_until__lte=today + timedelta(days=days))
+        summary = {"expired": expired_qs.count(),
+                   **{str(d): qs.filter(warranty_until__gt=today,
+                                        warranty_until__lte=today + timedelta(days=d)).count()
+                      for d in (30, 60, 90, 180)}}
+        rows = []
+        for dev in list(expiring.order_by("warranty_until")[:200]) + list(expired_qs.order_by("-warranty_until")[:100]):
+            rows.append({
+                "id": dev.id, "name": dev.name, "manage_ip": str(dev.manage_ip or ""),
+                "vendor": dev.vendor, "hw_model": dev.hw_model,
+                "warranty_until": dev.warranty_until, "days_left": (dev.warranty_until - today).days,
+                "owner": dev.owner.username if dev.owner else None,
+                "region_name": dev.region.name if dev.region else None,
+                "site_name": dev.site.name if dev.site else None,
+            })
+        return Response({"summary": summary, "within_days": days, "rows": rows})
 
 
 class DeviceGroupViewSet(BaseModelViewSet):

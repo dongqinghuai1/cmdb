@@ -1,7 +1,7 @@
 # 交接文档（面向下一个开发智能体）
 
-> 最后更新：2026-09-03（CMDB 基础补齐 R3：ACL/IPSec TechSnapshot 建模与入口，目标 ①-④ 全部完成）。
-> 一期+二期已完成并实测通过；三期「自动化运维」（M2026-09-02）、「轻量事件单」（M2026-09-02b）、「轻量变更单」（M2026-09-02c）、「CMDB 基础补齐 R1/R2/R3」（M2026-09-03/03b/03c）已上线，见文末里程碑。
+> 最后更新：2026-09-03（资产生命周期+保修到期提醒上线 M2026-09-03d）。
+> 一期+二期已完成并实测通过；三期「自动化运维」（M2026-09-02）、「轻量事件单」（M2026-09-02b）、「轻量变更单」（M2026-09-02c）、「CMDB 基础补齐 R1/R2/R3」（M2026-09-03/03b/03c）、「资产生命周期」（M2026-09-03d）已上线，见文末里程碑。
 > 读完本文 + DEPLOY.md + DEVELOPMENT.md 即可接手。
 
 ## 1. 当前状态总览
@@ -12,7 +12,7 @@
 |---|---|---|
 | system | ✅ 完成 | RBAC+数据权限、凭据保险箱(AES-GCM)、通知渠道(飞书webhook)、审计、ApiToken |
 | dcim | ✅ 完成 | 地区->机房->机柜树、机柜 U 位可视化(elevation API)、线缆表、**机房平面图 DIY 编辑器** |
-| cmdb | ✅ 完成（R1-R3 补齐） | 动态模型(attrs JSONB)、设备台账、Excel 导入导出、360° 视图、拖拽上架/换位/下架；**R1：数据质量看板、回收站、附件、维保License、变更历史、动态分组evaluate、软件版本一致性；R2：设备运营页+360技术概览(邻居/VLAN/路由/AP/会话)；R3：ACL/IPSec TechSnapshot 建模(写入+最新透出)** |
+| cmdb | ✅ 完成（R1-R3 + 资产生命周期） | 动态模型(attrs JSONB)、设备台账、Excel 导入导出、360° 视图、拖拽上架/换位/下架；**R1：质量看板/回收站/附件/维保/变更历史/动态分组/软件一致性；R2：设备运营页+360技术概览；R3：ACL/IPSec TechSnapshot 建模；5.5.7：生命周期流转(自动留事件)+资产事件+保修到期提醒** |
 | monitor | ✅ 骨架 | 采集器注册、SNMP 采集引擎(pysnmp, IF-MIB)、VM 统一 label 写入、分片任务 collect_shard |
 | usage | ✅ 完成 | 占用/预约(时间窗排他)、LoginEvent 表 |
 | alert | ✅ 骨架 | 规则引擎(metric/state)、dedup_key 去重、飞书通知、ack/resolve 闭环 |
@@ -74,6 +74,7 @@
 | **verify_cmdb_r1.py** | **CMDB R1：质量看板 / 回收站 / 附件(本地卷存储) / 维保 / 变更历史 / 动态分组 / 软件一致性 / 只读负例** | **33 PASS（sqlite 与容器 PG 各一遍）** |
 | **verify_cmdb_r2.py** | **CMDB R2：tech 概览端点区块/扩展入口 / 动态分组仅预览不改成员 / 软件版本聚合与 hw_model 过滤** | **9 PASS（sqlite 与容器 PG 各一遍）** |
 | **verify_cmdb_r3.py** | **CMDB R3：TechSnapshot 越权/参数校验/写入/最新覆盖/tech 透出/占位回落/只读可见** | **7 PASS（sqlite 与容器 PG 各一遍）** |
+| **verify_lifecycle.py** | **资产生命周期：流转留事件/同状态与非法 400/资产事件读写/越权/保修汇总口径与清单(临期±1天容差)** | **12 PASS（sqlite 与容器 PG 各一遍）** |
 | smoke_test.py | 端口级冒烟（登录->建柜->上架->冲突） | 10 PASS |
 | seed_demo.py | 演示数据：2 地区/2 机房/3 机柜/10 设备 | 幂等 |
 | seed_floorplan.py | 上海机房平面图示例布局 | 幂等 |
@@ -231,3 +232,23 @@
 **验证**：`scripts/verify_cmdb_r3.py` 7 PASS（sqlite 与容器 PG 各一遍）：只读 403 / 非法 kind 400 / payload 非对象 400 / 写快照 201 / tech 透出**最新**快照 / 未写前占位回落 / 只读可见。`/cmdb-tools` 页面 200。
 
 **待办/坑**：① payload 结构规范由各采集驱动自定（表结构刻意通用）；建议 fortigate 驱动输出 `{tunnels:[{name,peer,status,bytes_in/out,up_since}]}`、asa `{acls:[{id,name,action,protocol,src,dst,hits}]}` 供前端将来做表格化；② 快照无限增长——后续按 kind+device 只保留 N 天/条（清理由 celery 周期任务做）；③ 本表未与 NCM/告警联动（如隧道 down 转告警属四期/运营项）。
+
+---
+
+## 14. 里程碑 M2026-09-03d：资产生命周期 + 保修到期提醒（PRD 5.5.7 P1）
+
+**范围**：资产全生命周期状态机（规划→采购中→到货入库→上架运行→维修中→备件库→报废，字段早已具备）+ 每次流转留资产事件流水 + 保修到期 30/60/90/180 天与已过期提醒；不引入审批流（延续用户"审批类延后"口径）。
+
+**后端**（apps/cmdb，无新表——DeviceAssetEvent / Device.warranty_until 均在）：
+- `POST /cmdb/devices/{id}/lifecycle/`：body `{lifecycle_status, counterparty?, event_type?}`；校验目标合法且≠当前；自动写 DeviceAssetEvent（目标→事件映射 purchasing→purchase / in_stock / deploy / repair / spare / retire）+ auditlog update（before/after 状态）。门禁 cmdb.device.edit。
+- `GET|POST /cmdb/devices/{id}/asset-events/`：事件流水（operator 由 auth_user 反查，detail 展示 note 等）；POST 写事件（event_type 白名单，occurred_at 默认当前）。门禁 edit。
+- `GET /cmdb/devices/warranty-expiring/?within_days=`：summary {30/60/90/180, expired} + rows（临期升序 + 已过期降序，days_left 可为负，含位置/责任人）。
+- 设备 filterset 已支持 hw_model 等（R2 提供）。
+
+**前端**：
+- `Device360.vue` 新增「资产生命周期」卡：当前状态中文标签 + 保修到期剩余天数（<0 红 / ≤90 黄 / 其余绿）、状态下拉流转（禁用同状态）→记录流转即留事件；事件流水表（时间/类型标签/操作人/对方单号/备注）+「新增资产事件」弹窗。
+- `Cmtools.vue` 新增「保修到期」Tab：30/60/90/180/已过期计数 chips + 清单（设备名可点进 360、剩余天数红黄绿标签、责任人）。
+
+**验证**：`scripts/verify_lifecycle.py` 12 PASS（sqlite op_low 与容器 PG viewer_pg 各一遍）：只读 403×2、流转 200 且自动事件含 from/to 与操作人、同状态 400、非法状态 400、手工借出事件+备注回读、保修汇总口径(60 含临期 35 天 & 已过期计数)、清单 days_left（容器 UTC 差一天用 ±1 容差）、清理测试设备。`/cmdb-tools` 页面 200。
+
+**待办/坑**：① 保修提醒目前仅界面清单，无定时推送（如需飞书/邮件提醒，用 NotifyChannel 发提醒任务挂 celery beat，PRD 期望 30/60/90 提前提醒）；② 生命周期流转未做强制顺序（可直接 deployed→retired，P1 可接受，重流程可加过渡校验）；③ 资产事件 detail 前端仅展示 note，结构化字段（金额/单号/合同）由后续采购模块扩展；④ borrow/return 与 usage 模块占用/释放未联动（5.17 使用与共享域，独立交付）。

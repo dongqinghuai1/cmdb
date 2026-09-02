@@ -25,6 +25,57 @@
   </el-card>
 
   <el-card style="margin-top:14px">
+    <template #header>
+      <b>资产生命周期</b>
+      <el-tag style="margin-left:10px" size="small" :type="lcTagType(dev.lifecycle_status)">
+        {{ LIFECYCLE[dev.lifecycle_status] || dev.lifecycle_status }}</el-tag>
+      <span style="margin-left:16px;font-size:13px">
+        保修到期 {{ dev.warranty_until || "未设置" }}
+        <b v-if="dev.warranty_until" :style="{color: warrantyColor}">
+          （{{ warrantyDays >= 0 ? "剩余 " + warrantyDays + " 天" : "已过期 " + (-warrantyDays) + " 天" }}）</b>
+      </span>
+    </template>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+      <span style="font-size:13px;color:#606266">流转到：</span>
+      <el-select v-model="lcNew" size="small" style="width:170px" placeholder="选择目标状态">
+        <el-option v-for="(l, v) in LIFECYCLE" :key="v" :label="l" :value="v"
+                   :disabled="v === dev.lifecycle_status" />
+      </el-select>
+      <el-button size="small" type="primary" :disabled="!lcNew" @click="lcSet">记录流转</el-button>
+      <el-button size="small" type="success" style="margin-left:auto" @click="evDlg=true">新增资产事件</el-button>
+    </div>
+    <el-table :data="assetEvents" size="small" max-height="300">
+      <el-table-column label="时间" width="160">
+        <template #default="{row}">{{ fmt2(row.occurred_at) }}</template>
+      </el-table-column>
+      <el-table-column label="事件" width="110">
+        <template #default="{row}">
+          <el-tag size="small" :type="EVT_TYPE[row.event_type]?.t || 'info'">
+            {{ EVT_TYPE[row.event_type]?.l || row.event_type }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="operator" label="操作人" width="100" />
+      <el-table-column prop="counterparty" label="对方/单号" width="130" />
+      <el-table-column label="备注" min-width="140">
+        <template #default="{row}">{{ (row.detail && row.detail.note) || "-" }}</template>
+      </el-table-column>
+    </el-table>
+    <el-dialog v-model="evDlg" title="新增资产事件" width="460px">
+      <el-form label-width="80px" size="small">
+        <el-form-item label="事件类型" required>
+          <el-select v-model="evf.event_type" style="width:100%">
+            <el-option v-for="(x, v) in EVT_TYPE" :key="v" :label="x.l" :value="v" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="对方/单号"><el-input v-model="evf.counterparty" /></el-form-item>
+        <el-form-item label="备注"><el-input v-model="evf.note" type="textarea" :rows="2" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="evDlg=false">取消</el-button>
+        <el-button type="primary" @click="addEv">保存</el-button></template>
+    </el-dialog>
+  </el-card>
+
+  <el-card style="margin-top:14px">
     <template #header>接口（{{ interfaces.length }}）</template>
     <el-table :data="interfaces" size="small" stripe max-height="420">
       <el-table-column prop="name" label="接口" min-width="140" />
@@ -219,6 +270,47 @@ const route = useRoute();
 const devId = route.params.id;
 const dev = ref(null);
 const interfaces = ref([]);
+const LIFECYCLE = { planning: "规划", purchasing: "采购中", in_stock: "到货入库", deployed: "上架运行",
+                    repairing: "维修中", spare: "备件库", retired: "报废" };
+const EVT_TYPE = { purchase: { l: "采购", t: "info" }, in_stock: { l: "入库", t: "success" },
+                   deploy: { l: "部署上线", t: "success" }, repair: { l: "维修", t: "warning" },
+                   borrow: { l: "借出", t: "warning" }, return: { l: "归还", t: "" },
+                   spare: { l: "转备件", t: "" }, retire: { l: "报废", t: "danger" } };
+const lcNew = ref(null);
+const evDlg = ref(false);
+const assetEvents = ref([]);
+const evf = reactive({ event_type: "deploy", counterparty: "", note: "" });
+const warrantyDays = ref(null);
+const warrantyColor = ref("#67C23A");
+const calcWarranty = () => {
+  if (!dev.value?.warranty_until) return;
+  const d = new Date(dev.value.warranty_until + "T00:00:00");
+  warrantyDays.value = Math.ceil((d - Date.now()) / 86400000);
+  warrantyColor.value = warrantyDays.value < 0 ? "#F56C6C"
+    : warrantyDays.value <= 90 ? "#E6A23C" : "#67C23A";
+};
+const lcTagType = (s) => ({ planning: "info", purchasing: "", in_stock: "success", deployed: "success",
+                            repairing: "warning", spare: "info", retired: "danger" }[s] || "info");
+const loadAssetEvents = async () => {
+  assetEvents.value = (await api.get(`/cmdb/devices/${devId}/asset-events/`)) || [];
+};
+const lcSet = async () => {
+  const r = await api.post(`/cmdb/devices/${devId}/lifecycle/`, { lifecycle_status: lcNew.value });
+  ElMessage.success("已流转为 " + (LIFECYCLE[r.lifecycle_status] || r.lifecycle_status));
+  dev.value.lifecycle_status = r.lifecycle_status;
+  lcNew.value = null;
+  loadAssetEvents();
+};
+const addEv = async () => {
+  await api.post(`/cmdb/devices/${devId}/asset-events/`, {
+    event_type: evf.event_type, counterparty: evf.counterparty,
+    detail: evf.note ? { note: evf.note } : {},
+  });
+  ElMessage.success("已记录");
+  evDlg.value = false;
+  Object.assign(evf, { event_type: "deploy", counterparty: "", note: "" });
+  loadAssetEvents();
+};
 const licenses = ref([]);
 const attachments = ref([]);
 const history = ref([]);
@@ -239,6 +331,8 @@ onMounted(async () => {
   const d = await api.get(`/cmdb/devices/${devId}/360/`);
   dev.value = d;
   interfaces.value = (d.interfaces || []).map((i) => ({ ...i, stat: i.stat || null }));
+  calcWarranty();
+  loadAssetEvents();
   loadSide();
 });
 const fmt2 = (s) => (s || "").replace("T", " ").slice(0, 19);
