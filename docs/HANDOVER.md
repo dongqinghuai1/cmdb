@@ -319,3 +319,17 @@
   - admin/op_low：全量
 - **验证**：五账号 `/auth/me` perm_codes 断言；net_demo 直连 network-overview 200（看得见进得去）；页面 200。
 - **待办/坑**：① 导航码与功能码分离属"展示层 RBAC"——直链仍可达无导航权的页面（数据安全由后端兜底，符合 IA 说明）；② 授权界面（角色-菜单拖树）仍远期；③ init 需在新增页面时同步 menu.* 与前端 MENU 常量（单点维护：layout MENU ↔ init menu.* ↔ viewset required_perm 三处对齐）。
+
+---
+
+## 20. 里程碑 M2026-09-06：采集解析驱动 tech-parse（ACL/NAT/IPSec 真数据填充）
+
+- **范围**：把网络总览/设备 360 里的 NAT/ACL/IPSec"扩展位"变成**可落真数据的采集路径**——延续 AP 同步的"粘贴设备输出→解析落库"模式，未来接 SSH 驱动直接复用同一 payload 结构（纯函数解析器可离线单测）。
+- **后端**：
+  - 新模块 `apps/cmdb/collectors.py`：`parse_acl`（Cisco ASA/FTD show access-list，含 permit/deny/hitcnt/spec）、`parse_nat`（FortiOS show firewall vip → VIP 块 extip/mappedip/extintf）、`parse_ipsec`（FortiOS get vpn ipsec tunnel status → name/id/proto/peer/local/status）；无法识别抛 ValueError（附示例提示）。
+  - TechSnapshot.Kind 增加 `nat`（迁移 cmdb.0003，仅 choices）；`GET tech` 扩展透出 acl/nat/ipsec。
+  - 新动作 `POST /cmdb/devices/{id}/tech-parse/`：body {kind, text, save?}——预览仅需视图权限；`save=true` 需 execute 权限并写 audit（execute 留痕），落库后 tech 与 network-overview 立即透出。
+  - `network-overview` 扩展位升级：按设备取 acl/nat/ipsec 最新快照聚合 `{collected, devices, total, latest_at}`，quality_history/wireless_deep 仍为未接入说明。
+- **前端**：Device360 技术概览卡头加「粘贴输出解析」按钮（品类+输出+解析预览 summary/rows→保存为快照，保存后刷新）；网络总览扩展位卡：已采集→绿标「N 台 / M 条 + 最新时间」，未接入→灰标说明。
+- **验证**：`scripts/verify_techparse.py` 13 PASS ×2（sqlite op_low / 容器 PG viewer_pg）：预览不落库、垃圾输入 400+hint、只读可预览但保存 403、三类落库与 tech 透出、总览聚合 collected/devices/total、只读可见、purge 后孤儿快照不计入回落未采集（acl 可能含 R3 遗留数据故只断言 nat/ipsec）。
+- **待办/坑**：① 解析器覆盖的是"典型输出"，真实设备页头/版本差异需在驱动阶段补样例回归；② 快照清理（按 kind+device 保留 N 条）尚未做；③ SSH 自动采集驱动（Netmiko 或跳板执行 + 周期任务）为后续目标，tech-parse 即其共享落库通道。

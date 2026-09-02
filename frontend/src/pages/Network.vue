@@ -98,8 +98,12 @@
         <el-card shadow="never" style="margin-top:12px">
           <template #header><b>扩展采集位（已预留建模，接入即展示）</b></template>
           <div v-for="e in EXT" :key="e.key" class="extrow">
-            <el-tag size="small" type="info">{{ e.label }}</el-tag>
-            <span style="color:#909399">{{ e.note }}</span>
+            <el-tag size="small" :type="e.collected ? 'success' : 'info'">{{ e.label }}</el-tag>
+            <template v-if="e.collected">
+              <span style="color:#67C23A">已采集 {{ e.devices }} 台 / {{ e.total }} 条</span>
+              <span style="color:#909399">最新 {{ fmt2(e.latest_at) }}</span>
+            </template>
+            <span v-else style="color:#909399">{{ e.note }}</span>
           </div>
         </el-card>
       </el-col>

@@ -238,6 +238,7 @@ class TechSnapshot(TimeStampedModel):
     """
     class Kind(models.TextChoices):
         ACL = "acl", "acl"
+        NAT = "nat", "nat"
         IPSEC = "ipsec", "ipsec"
 
     device_id = models.BigIntegerField(db_index=True)

@@ -174,7 +174,12 @@
   </el-card>
 
   <el-card style="margin-top:14px">
-    <template #header>技术概览（采集数据 + 扩展入口）</template>
+    <template #header>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <b>技术概览（采集数据 + 扩展入口）</b>
+        <el-button size="small" type="primary" @click="openParse">粘贴输出解析</el-button>
+      </div>
+    </template>
     <div style="display:flex;gap:12px;flex-wrap:wrap">
       <el-card shadow="never" style="flex:1;min-width:280px">
         <template #header>VLAN（{{ tech.vlans?.length || 0 }}）</template>
@@ -258,6 +263,38 @@
       </el-card>
     </div>
   </el-card>
+
+  <el-dialog v-model="parseDlg" title="粘贴设备输出解析（tech-parse 采集驱动）" width="720px" top="5vh">
+    <el-form label-width="90px" size="small">
+      <el-form-item label="品类" required>
+        <el-select v-model="parseKind" style="width:220px" @change="parseResult=null">
+          <el-option v-for="(h, k) in PARSE_KINDS" :key="k" :label="h.label + ' — ' + h.cmd" :value="k" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="设备输出" required>
+        <el-input v-model="parseText" type="textarea" :rows="9" :placeholder="PARSE_KINDS[parseKind].hint" />
+      </el-form-item>
+      <el-form-item v-if="parseResult">
+        <div style="width:100%">
+          <div style="margin-bottom:6px">
+            <el-tag type="success" size="small">解析到 {{ parseResult.count }} 条</el-tag>
+            <el-tag v-for="(c, k) in parseResult.summary || {}" :key="k" size="small"
+                    type="info" style="margin-left:8px">{{ k }} {{ c }}</el-tag>
+            <el-tag v-if="parseResult.saved" type="success" size="small" style="margin-left:8px">
+              已保存快照 #{{ parseResult.snapshot_id }}</el-tag>
+          </div>
+          <pre style="max-height:240px;overflow:auto;margin:0;font-size:12px;white-space:pre-wrap">
+{{ JSON.stringify(parseResult.rows || [], null, 1).slice(0, 2000) }}</pre>
+        </div>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="parseDlg=false">关闭</el-button>
+      <el-button :disabled="!parseText.trim()" @click="doParse(false)">解析预览</el-button>
+      <el-button type="primary" :disabled="!(parseResult && parseResult.ok && !parseResult.saved)"
+                 @click="doParse(true)">保存为快照</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup>
@@ -326,6 +363,30 @@ const fmt = (bps) => {
   return v.toFixed(1) + units[i];
 };
 const reload = () => api.get(`/cmdb/devices/${devId}/360/`);
+
+const parseDlg = ref(false);
+const parseKind = ref("acl");
+const parseText = ref("");
+const parseResult = ref(null);
+const PARSE_KINDS = {
+  acl: { label: "ACL 策略", cmd: "Cisco ASA/FTD", hint: "粘贴 show access-list 输出原文（可含页头/页脚）" },
+  nat: { label: "NAT/VIP", cmd: "FortiOS", hint: "粘贴 show firewall vip 输出（config firewall vip ... end）" },
+  ipsec: { label: "IPSec 隧道", cmd: "FortiOS", hint: "粘贴 get vpn ipsec tunnel status 输出（name: xxx(...) proto=... peer=... status=...）" },
+};
+const openParse = () => { parseDlg.value = true; parseText.value = ""; parseResult.value = null; };
+const doParse = async (save) => {
+  try {
+    const r = await api.post(`/cmdb/devices/${devId}/tech-parse/`, {
+      kind: parseKind.value, text: parseText.value, save: save || undefined,
+    });
+    parseResult.value = r;
+    if (r.saved) { ElMessage.success("快照已保存"); loadSide(); }
+  } catch (e) {
+    ElMessage.error((e.response && (e.response.data?.detail || e.response.data?.hint))
+      || e.message || "解析失败");
+    parseResult.value = null;
+  }
+};
 
 onMounted(async () => {
   const d = await api.get(`/cmdb/devices/${devId}/360/`);

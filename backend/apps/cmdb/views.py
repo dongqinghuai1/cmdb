@@ -297,14 +297,16 @@ class DeviceViewSet(BaseModelViewSet):
             cols = [c[0] for c in cur.description]
             sessions = [dict(zip(cols, r)) for r in cur.fetchall()]
         extensions = {}
-        for kind, note in (("acl", "ACL 策略采集驱动未接入"), ("ipsec", "IPSec/IKE 隧道采集驱动未接入")):
+        for kind, note in (("acl", "ACL 策略采集驱动未接入"),
+                           ("nat", "NAT/VIP 采集驱动未接入"),
+                           ("ipsec", "IPSec/IKE 隧道采集驱动未接入")):
             ts = TechSnapshot.objects.filter(device_id=d.pk, kind=kind).first()
             if ts:
                 extensions[kind] = {"supported": True, "updated_at": ts.created_at,
                                     "payload": ts.payload}
             else:
                 extensions[kind] = {"supported": False,
-                                    "note": f"{note}（R3 已建模 cmdb_techsnapshot：采集驱动解析后 POST tech-snapshot 落库即在此展示）"}
+                                    "note": f"{note}（设备 360 支持粘贴输出解析：POST tech-parse 落库即在此展示）"}
         return Response({
             "neighbors": neighbors, "routes": routes, "route_meta": route_meta,
             "ap": ap, "vlans": sorted(vlan_set), "sessions": sessions,
@@ -330,6 +332,38 @@ class DeviceViewSet(BaseModelViewSet):
             return Response({"detail": "payload too large (max ~200KB)"}, status=400)
         ts = TechSnapshot.objects.create(device_id=d.pk, kind=kind, payload=payload)
         return Response({"id": ts.id, "kind": kind, "created_at": ts.created_at}, status=201)
+
+    @action(detail=True, methods=["post"], url_path="tech-parse")
+    def tech_parse(self, request, pk=None):
+        """采集驱动解析入口（粘贴式）：把设备 CLI 输出文本解析为结构化数据并可选落库。
+
+        body {kind: acl|nat|ipsec, text, save?: true}；
+        预览仅需视图权限；save=true 需 execute 权限并写 audit（执行留痕）。
+        """
+        dev = self.get_object()
+        kind = request.data.get("kind")
+        text = (request.data.get("text") or "").strip()
+        if kind not in ("acl", "nat", "ipsec"):
+            return Response({"detail": "kind must be acl/nat/ipsec"}, status=400)
+        if not text:
+            return Response({"detail": "text required"}, status=400)
+        from apps.cmdb.collectors import KIND_HINTS, PARSERS
+        try:
+            parsed = PARSERS[kind](text)
+        except ValueError as e:
+            return Response({"detail": str(e), "hint": KIND_HINTS[kind]}, status=400)
+        out = {"ok": True, "kind": kind, "count": parsed["count"],
+               "rows": parsed["rows"], "summary": parsed["summary"], "saved": False}
+        if request.data.get("save"):
+            _need_execute(request.user)
+            ts = TechSnapshot.objects.create(device_id=dev.pk, kind=kind, payload=parsed)
+            from common.audit import write_audit
+            write_audit(request.user, "execute", "Device", dev.pk,
+                        before={"action": f"tech-parse:{kind}"},
+                        after={"snapshot_id": ts.id, "count": parsed["count"]},
+                        source_ip=request.META.get("REMOTE_ADDR", ""))
+            out.update(saved=True, snapshot_id=ts.id, created_at=ts.created_at)
+        return Response(out)
 
     # ---------- 软件版本一致性（5.5.4 P1 首步：型号维度版本分布） ----------
     @action(detail=False, methods=["get"], url_path="software-summary")
@@ -523,6 +557,36 @@ class DeviceViewSet(BaseModelViewSet):
                 vlan_cnt[v] += 1
         vlan_rows = [{"vlan": v, "count": c} for v, c in vlan_cnt.most_common(50)]
 
+        # 扩展采集品类聚合（TechSnapshot：acl/nat/ipsec 按设备取最新，汇总台数与条目数）
+        agg, seen = {}, set()
+        for ts in TechSnapshot.objects.filter(
+                device_id__in=ids, kind__in=("acl", "nat", "ipsec")).order_by("kind", "device_id", "-id"):
+            key = (ts.device_id, ts.kind)
+            if key in seen:
+                continue
+            seen.add(key)
+            b = agg.setdefault(ts.kind, {"devices": 0, "total": 0, "latest": ts.created_at})
+            b["devices"] += 1
+            b["total"] += len((ts.payload or {}).get("rows") or [])
+            if ts.created_at > b["latest"]:
+                b["latest"] = ts.created_at
+        ext_items = [
+            {"key": "nat", "label": "公网 NAT/VIP", "collected": False,
+             "note": "设备 360 粘贴 FortiOS show firewall vip 解析落库（tech-parse）"},
+            {"key": "acl", "label": "ACL 策略", "collected": False,
+             "note": "设备 360 粘贴 ASA show access-list 解析落库（tech-parse）"},
+            {"key": "ipsec", "label": "IPSec 隧道", "collected": False,
+             "note": "设备 360 粘贴 FortiOS get vpn ipsec tunnel status 解析落库（tech-parse）"},
+            {"key": "quality_history", "label": "链路质量时序(错包/时延/丢包趋势)", "collected": False,
+             "note": "依赖 DeviceInterfaceStat 周期采样落历史表"},
+            {"key": "wireless_deep", "label": "无线深度(漫游/RSSI/信道利用率)", "collected": False,
+             "note": "依赖 WLC 详细采集"},
+        ]
+        for e in ext_items:
+            a = agg.get(e["key"])
+            if a:
+                e.update(collected=True, devices=a["devices"], total=a["total"], latest_at=a["latest"])
+
         return Response({
             "generated_at": timezone.now().isoformat(),
             "meta": {"region_id": rid, "site_id": sid, "devices_covered": len(ids),
@@ -533,16 +597,7 @@ class DeviceViewSet(BaseModelViewSet):
             "links": {"summary": link_sum, "rows": link_rows[:200]},
             "ap": {"rows": ap_rows},
             "vlans": {"rows": vlan_rows},
-            "extensions": [
-                {"key": "nat", "label": "公网 S/D NAT 状态", "collected": False,
-                 "note": "待 fortigate/asa 采集驱动写入 TechSnapshot(kind=nat)"},
-                {"key": "acl", "label": "ACL 策略", "collected": False,
-                 "note": "已建模 cmdb_techsnapshot(kind=acl)，待采集驱动"},
-                {"key": "quality_history", "label": "链路质量时序(错包/时延/丢包趋势)", "collected": False,
-                 "note": "依赖 DeviceInterfaceStat 周期采样落历史表"},
-                {"key": "wireless_deep", "label": "无线深度(漫游/RSSI/信道利用率)", "collected": False,
-                 "note": "依赖 WLC 详细采集"},
-            ],
+            "extensions": ext_items,
         })
 
 
