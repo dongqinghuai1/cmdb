@@ -168,6 +168,50 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     filterset_class = AuditLogFilter
     search_fields = ["resource_type", "resource_id", "source_ip"]
 
+    @action(detail=False, methods=["get"], url_path="summary")
+    def summary(self, request):
+        """审计概览：近 N 小时（默认 24）总量 + 动作/对象/人 TOP + 近 7 日趋势。"""
+        from datetime import timedelta
+        from django.db.models import Count
+        from django.utils import timezone
+        hours = int(request.query_params.get("hours", 24))
+        since = timezone.now() - timedelta(hours=hours)
+        qs = AuditLog.objects.filter(created_at__gte=since)
+        top = (lambda field: list(qs.order_by()
+              .values(field).annotate(c=Count("id")).order_by("-c")[:6]))
+        days = list(qs.filter(created_at__date__gte=(timezone.now() - timedelta(days=6)).date())
+                    .order_by().values("created_at__date")
+                    .annotate(c=Count("id")).order_by("created_at__date"))
+        return Response({
+            "hours": hours, "total": qs.count(),
+            "by_action": top("action"),
+            "by_resource": [x for x in top("resource_type") if x.get("resource_type")],
+            "by_user": [x for x in top("user__username") if x.get("user__username")],
+            "days": [{"date": str(d["created_at__date"]), "count": d["c"]} for d in days],
+        })
+
+    @action(detail=False, methods=["get"], url_path="export")
+    def export(self, request):
+        """导出当前筛选结果为 CSV（≤5000 行；列含变更前后 JSON）。"""
+        import csv
+        import json
+        from django.http import HttpResponse
+        from django.utils import timezone as _tz
+        qs = self.filter_queryset(self.get_queryset())[:5000]
+        resp = HttpResponse(content_type="text/csv; charset=utf-8")
+        resp["Content-Disposition"] = ('attachment; filename="audit_{}.csv"'
+                                       .format(_tz.now().strftime("%Y%m%d_%H%M%S")))
+        w = csv.writer(resp)
+        w.writerow(["created_at", "user", "action", "resource_type", "resource_id",
+                    "source_ip", "before", "after"])
+        for o in qs:
+            w.writerow([o.created_at.isoformat() if o.created_at else "",
+                        (o.user.username if o.user else ""), o.action, o.resource_type,
+                        o.resource_id or "", o.source_ip or "",
+                        json.dumps(o.before or {}, ensure_ascii=False),
+                        json.dumps(o.after or {}, ensure_ascii=False)])
+        return resp
+
 
 class SystemConfigViewSet(BaseModelViewSet):
     queryset = SystemConfig.objects.all()

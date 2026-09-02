@@ -383,3 +383,15 @@
 - **前端**：`DcimOps.vue`（资产与机房→「机房作业工单」，nav=menu.dcim）：状态过滤、新建/编辑弹窗（类型/机柜/关联设备/目标 U 位/执行人/计划时间）、开工/完成(结果)/取消流转。
 - **验证**：`scripts/verify_dcimops.py` 12 PASS ×2（sqlite op_low / 容器 PG viewer_pg）：只读建单 403、建单/过滤/开工/重复开工 400/完成+结果落库/终态不可取消/取消流转/编辑/清理。
 - **待办/坑**：① U 位为"计划目标值"，设备实际机柜位置变更仍走设备编辑——双入口可能存在不一致（后续可做"完成时按 U 位校验冲突并一键落位"）；② 无独立菜单权限点（复用 menu.dcim + dcim.rack.*，符合角色既有授权）；③ 工单未接 change 审批流（作业类工单当前无需审批，符合轻量定位）。
+
+---
+
+## 25. 里程碑 M2026-09-11：审计概览 + CSV 导出（审计员域增强）
+
+- **范围**：审计页从"裸日志流水"升级为审计员工作台——近 24h 总量/动作/对象/人 TOP、近 7 日趋势、一键导出当前筛选。
+- **后端**（apps/system/views.py::AuditLogViewSet，均 system.audit.view）：
+  - `GET /system/audit-logs/summary/?hours=n`：近 N 小时总览 + 动作/对象类型/操作人 TOP6 + 近 7 日按日计数；
+  - `GET /system/audit-logs/export/`：当前筛选条件导出 CSV（≤5000 行；时间/操作人/动作/对象/来源 IP + 变更前后 JSON 两列，UTF-8 BOM）。
+- **前端**：Audit.vue 顶部新增概览条——24h 总量 Tag + 近 7 日标签、动作/对象/操作人 TOP 小标签组、「导出当前筛选（CSV）」按钮（客户端 BOM CSV，最多 2000 行）。
+- **验证**：`scripts/verify_audit.py` 6 PASS ×2（sqlite auditor / 容器 PG auditor）：auditor（仅 system.audit.view）可看 summary 与导出 CSV（表头/非空）、hours 生效、列表最新可读。
+- **待办/坑**：① export 用 csv 模块直接流式写 resp（审计表字段无转义隐患），但筛选参数沿用 filterset 需与页面参数一致（created_at_after/before、search）；② 导出上限 5000（如需要全量导出需加分页参数）；③ by_user 无姓名前缀区分（用户名即人名体系内约定）。

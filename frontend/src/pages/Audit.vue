@@ -1,6 +1,25 @@
 <template>
   <div>
     <el-card shadow="never">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <el-tag type="danger">近{{ sm.hours || 24 }}h 操作 {{ sm.total ?? 0 }}</el-tag>
+        <el-tag v-for="d in sm.days || []" :key="d.date" size="small" type="info">
+          {{ String(d.date).slice(5) }} {{ d.count }}</el-tag>
+        <el-button size="small" type="warning" style="margin-left:auto" :loading="exporting"
+                   @click="doExport">导出当前筛选（CSV）</el-button>
+      </div>
+      <div style="display:flex;gap:8px;font-size:12px;color:#606266;flex-wrap:wrap;margin-bottom:8px">
+        <span><b>动作：</b>
+          <el-tag v-for="a in sm.by_action || []" :key="a.action" size="small" style="margin-right:4px"
+                  :type="ACTION_TYPE[a.action] || 'info'">{{ a.action }}×{{ a.c }}</el-tag></span>
+        <span><b>对象：</b>
+          <el-tag v-for="a in (sm.by_resource || []).slice(0,5)" :key="a.resource_type" size="small"
+                  style="margin-right:4px">{{ a.resource_type }}×{{ a.c }}</el-tag></span>
+        <span><b>操作人：</b>
+          <el-tag v-for="a in (sm.by_user || []).slice(0,5)" :key="a.user__username" size="small"
+                  style="margin-right:4px">{{ a.user__username }}×{{ a.c }}</el-tag></span>
+      </div>
+      <el-divider style="margin:4px 0 10px" />
       <el-form inline size="small" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px">
         <el-select v-model="f.action" placeholder="动作" clearable style="width:130px">
           <el-option v-for="a in ACTIONS" :key="a" :label="a" :value="a" />
@@ -71,6 +90,7 @@
 
 <script setup>
 import { onMounted, reactive, ref } from "vue";
+import { ElMessage } from "element-plus";
 import api from "../api";
 
 const ACTIONS = ["create", "update", "delete", "restore", "purge", "execute"];
@@ -80,21 +100,51 @@ const f = reactive({ action: "", q: "", date: null, page: 1 });
 const rows = ref([]);
 const total = ref(0);
 const pageSize = 50;
+const sm = ref({});
+const exporting = ref(false);
 const dlg = ref(false);
 const cur = ref(null);
 const diffRows = ref([]);
 
-const fmt2 = (s) => (s || "").replace("T", " ").slice(0, 19);
-const pretty = (v) => (v === undefined || v === null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
-const load = async (page) => {
-  f.page = page || 1;
-  const params = { page: f.page, page_size: pageSize };
+const loadSummary = async () => {
+  sm.value = await api.get("/system/audit-logs/summary/");
+};
+const paramsOf = (page, size) => {
+  const params = { page: page || 1, page_size: size || pageSize };
   if (f.action) params.action = f.action;
   if (f.q) params.search = f.q;
   if (f.date && f.date.length === 2) {
     params.created_at_after = f.date[0];
     params.created_at_before = f.date[1];
   }
+  return params;
+};
+const doExport = async () => {
+  exporting.value = true;
+  try {
+    const r = await api.get("/system/audit-logs/", { params: paramsOf(1, 2000) });
+    const data = r.results || [];
+    if (!data.length) { ElMessage.warning("当前筛选无数据"); return; }
+    const head = ["时间", "操作人", "动作", "对象类型", "对象ID", "来源IP", "变更前", "变更后"];
+    const lines = [head.join(",")].concat(data.map((o) => [
+      fmt2(o.created_at), o.username || "", o.action, o.resource_type, o.resource_id || "",
+      o.source_ip || "", pretty(o.before), pretty(o.after),
+    ].map((v) => '"' + String(v).replace(/"/g, '""') + '"').join(",")));
+    const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "audit_export_" + new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-") + ".csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+    ElMessage.success("已导出 " + data.length + " 行");
+  } finally { exporting.value = false; }
+};
+
+const fmt2 = (s) => (s || "").replace("T", " ").slice(0, 19);
+const pretty = (v) => (v === undefined || v === null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
+const load = async (page) => {
+  f.page = page || 1;
+  const params = paramsOf(f.page);
   const r = await api.get("/system/audit-logs/", { params });
   rows.value = r.results || [];
   total.value = r.count || 0;
@@ -118,7 +168,7 @@ const openDetail = (row) => {
     .map((k) => ({ k, before: b[k], after: a[k] }));
   dlg.value = true;
 };
-onMounted(() => load(1));
+onMounted(() => { load(1); loadSummary(); });
 </script>
 
 <style scoped>
