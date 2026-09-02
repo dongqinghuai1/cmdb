@@ -19,7 +19,26 @@
 | inspect | ✅ 骨架 | 模板/检查项、执行任务、异常转告警(共用事件表) |
 | automate | ✅ 三期首模块 | 脚本库 / 高危审批 / 批量执行(灰度批次) / 逐台明细（ER 4.12；Ansible/任务编排/固件升级 P2 待落地） |
 | change | ✅ 三期第2/3交付 | **事件单**（报障->分派->处理->反馈->关闭 + SLA + 告警联动）+ **轻量变更单**（12.2-5：申请->审批->实施->验证->关闭/驳回/回滚，审批复用 automate.Approval；角色分离 applicant/implementer/verifier/approver）（ER 4.13） |
-| 其余 | ⬜ 骨架 | ai / report：空壳 models + 空路由，模型定义见 ER 4.15/4.16 |
+| report | ✅ 三期交付 | 见下方 11 项矩阵（M37 报表中心：快照/订阅/每日 beat） |
+| ai | ⬜ 骨架 | LLM 网关已留 settings.LLM_*、NL2Query 待补（见 §3 四期） |
+
+**用户点名补交完成（M2026-09-16 ~ 09-24，11 项全部交付；双通道回归见 §5 各 verify 行）**：
+
+| 功能 | 里程碑 | 交付要点 | verify ×2 通道 |
+|---|---|---|---|
+| 线缆与 LLDP 比对 / 拓扑自动发现 | M2026-09-17（M31） | dcim Cable×topo LldpNeighbor 自动比对标记；LLDP 邻居自动发现 + 90min 老化 | verify_topo_lldp 22 PASS |
+| 告警收敛/静默 | M2026-09-18 ~ 09-21（M32/M36） | 占用静默、复燃合并、根因抑制（邻接×级别，suppressed 标记/清除）、变更窗口自动静默 | converge 18 / suppress 19 PASS |
+| 值班排班 | M2026-09-18b（M33） | DutySchedule API + 日排班校验/交接 | verify_duty 19 PASS |
+| 固件升级编排 | M2026-09-20（M35） | 计划/审批/分阶段执行/验证（automate 域，SSH 复用） | verify_firmware 20 PASS |
+| 安全基线 | M2026-09-19（M34） | 规则库×scope、检查结果、不合规联动告警、修复恢复 | verify_baseline 15 PASS |
+| 报表中心 | M2026-09-22（M37） | 四类日快照(幂等) + 订阅推送 + beat 06:45 | verify_report 21 PASS |
+| PDU 电源 | M2026-09-22b（M38） | PowerSample 实测×额定利用率；SNMP mock/Prometheus 双适配、总览/超阈值 | verify_power 15 PASS |
+| vCenter 同步 | M2026-09-23（M39） | VmwareSource + Device(虚机) 幂等 upsert/收敛软删复活 | verify_vcenter 14 PASS |
+| 飞书 SSO | M2026-09-23b（M40） | OAuth 跳转/callback 建号发 JWT、组织同步幂等、system.sso 权限 | verify_feishu 19 PASS |
+| IPAM 收尾 | M2026-09-24（M41） | ARP 周期采集(SNMP ipNetToMediaTable)+interface 回填+大网段格子图切片 | verify_ipam 17 PASS |
+| NCM 配置备份/diff | 早期交付 | 备份留痕/diff/内容回放 + 基线（M34 复用） | verify_ncm 8 PASS |
+
+**M2026-09-24 全量回归（双通道）**：PG 20 套全绿（api_test 33 / automate 33 / change 28 / converge 18 / suppress 19 / duty 19 / baseline 15 / firmware 20 / silence_ap 7 / ncm 8 / topo_lldp 22 / report 21 / power 15 / vcenter 14 / feishu 19 / ipam 17 / syslog 7 / collect 6 / errors 21 / edit 7），sqlite 同域 9 套全绿。期间修复两处环境/脚本问题：① demo 种子（A01/B01 机柜等，seed_demo.py）被早期并行回归破坏 → 重灌后 verify_edit/errors 恢复绿；② verify_collect 原 12s 固定等待在大库（全量 16+ 台 ×1.7s/台）不足 → 改轮询（≤90s）恢复 6 PASS。
 
 **前端**：登录/工作台/机房管理(树+平面图+U位)/设备台账+360/告警/巡检/系统管理，全部可用。
 

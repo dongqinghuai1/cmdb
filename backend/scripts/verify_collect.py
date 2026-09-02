@@ -60,18 +60,24 @@ call("POST", "/cmdb/devices/", tok, {"name": "T-UP", "model": sw, "vendor": "T",
 call("POST", "/cmdb/devices/", tok, {"name": "T-DOWN", "model": sw, "vendor": "T",
                                      "manage_ip": "203.0.113.99", "region": reg, "site": site})
 
-# 触发全量采集并同步等待 worker 完成（两台，很快）
+# 触发全量采集并轮询等待 worker 完成（批量扫描按设备数线性耗时，12s 固定等待在大库下不足）
 st, r = call("POST", "/monitor/collect/", tok, {})
 check("collect triggered", st in (200, 201), (st, r))
-time.sleep(12)
-
-_, up = call("GET", "/cmdb/devices/?search=T-UP", tok)
-_, down = call("GET", "/cmdb/devices/?search=T-DOWN", tok)
-up_dev = up["results"][0]
-down_dev = down["results"][0]
-check("reachable device -> online", up_dev["online_status"] == "online", up_dev["online_status"])
-check("unreachable device -> offline", down_dev["online_status"] == "offline", down_dev["online_status"])
-check("last_seen_at set", bool(up_dev["last_seen_at"]), up_dev["last_seen_at"])
+up_dev = down_dev = None
+for _ in range(30):
+    time.sleep(3)
+    _, up = call("GET", "/cmdb/devices/?search=T-UP", tok)
+    _, down = call("GET", "/cmdb/devices/?search=T-DOWN", tok)
+    if up["results"] and down["results"]:
+        up_dev, down_dev = up["results"][0], down["results"][0]
+        if up_dev["online_status"] == "online" and down_dev["online_status"] == "offline":
+            break
+check("reachable device -> online", bool(up_dev) and up_dev["online_status"] == "online",
+      up_dev["online_status"] if up_dev else None)
+check("unreachable device -> offline", bool(down_dev) and down_dev["online_status"] == "offline",
+      down_dev["online_status"] if down_dev else None)
+check("last_seen_at set", bool(up_dev and up_dev["last_seen_at"]),
+      up_dev["last_seen_at"] if up_dev else None)
 
 # VM 指标落库（用临时脚本文件避免 shell 引号问题）
 vm_script = '''

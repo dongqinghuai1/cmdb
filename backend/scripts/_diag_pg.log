@@ -1,0 +1,52 @@
+== verify_automate ==
+PASS  POST /automate/script-runs/ -> 201 (expect 201) 
+  PASS  ??????? 3 (got 3)
+  PASS  ?????к?? 2 (got {'status': 'running', 'dispatched': 1, 'gray_remaining': 2})
+  PASS  ????? running done=1 (got running {'pending': 2, 'success': 1, 'total': 3, 'done': 1})
+  PASS  ???????????·?
+  PASS  ????????? success 3/3 (got success {'success': 3, 'total': 3, 'done': 3})
+
+???: 33 PASS / 0 FAIL
+
+== verify_change ==
+PASS F2b ??????????
+PASS F3 ?????????? -> 400
+PASS G1 closed ????????
+PASS G2 ?????(???????)>=2
+PASS G3 Approval ???????(approved/rejected)
+PASS G4 ??????(???????>=12)
+
+=== 28 PASS / 0 FAIL ===
+
+== verify_topo_lldp ==
+PASS S11 ?????????
+PASS S12 pair1 ??? active
+PASS S13 pair3 ???????? -> mismatch
+PASS S14 δ? pair2 ?????? source=lldp
+PASS S15 ?????????
+PASS S16 purge ???? LLDP ???????
+
+=== 22 PASS / 0 FAIL ===
+
+== verify_edit ==
+.\.venv\Scripts\python.exe : Traceback (most recent call last):
+所在位置 行:3 字符: 10
++   $out = .\.venv\Scripts\python.exe scripts\$s.py http://127.0.0.1:80 ...
++          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last)::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "E:\ai-yunwei\backend\scripts\verify_edit.py", line 45, in <module>
+    a01 = next(k for k in rks["results"] if k["name"] == "A01")
+StopIteration
+
+== verify_collect ==
+target ip: 172.30.0.3
+PASS collect triggered
+FAIL reachable device -> online  offline
+PASS unreachable device -> offline
+FAIL last_seen_at set  None
+PASS metrics in VictoriaMetrics
+
+RESULT: 4 passed, 2 failed
+

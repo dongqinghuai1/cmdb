@@ -1,0 +1,9 @@
+api_test		FAILS=6
+verify_report	RESULT: 21 passed, 0 failed	FAILS=0
+verify_power	RESULT: 15 passed, 0 failed	FAILS=0
+verify_vcenter	RESULT: 14 passed, 0 failed	FAILS=0
+verify_feishu	RESULT: 16 passed, 3 failed	FAILS=3
+verify_ipam		FAILS=0
+verify_change		FAILS=1
+verify_suppress	RESULT: 19 passed, 0 failed	FAILS=0
+verify_alert_converge	RESULT: 18 passed, 0 failed	FAILS=0
