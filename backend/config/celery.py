@@ -22,6 +22,7 @@ app.conf.task_routes = {
     "monitor.collect_*": {"queue": "nops"},
     "alert.*": {"queue": "nops"},
     "inspect.*": {"queue": "nops"},
+    "change.*": {"queue": "nops"},
 }
 
 # ---- 超时与可靠性 ----
@@ -42,4 +43,6 @@ app.conf.beat_schedule = {
     # 平台自监控 + 日志清理
     "platform-self-check": {"task": "monitor.self_check", "schedule": 300.0},
     "log-cleanup": {"task": "monitor.log_cleanup", "schedule": crontab(hour=4, minute=0)},
+    # 事件单 SLA 超时检查
+    "change-sla-check": {"task": "change.check_sla", "schedule": 600.0},
 }

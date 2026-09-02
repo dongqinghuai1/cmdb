@@ -55,12 +55,17 @@ class AlertSilenceViewSet(viewsets.ModelViewSet):
 
 
 class AlertEventViewSet(viewsets.ModelViewSet):
-    http_method_names = ["get", "patch"]
+    http_method_names = ["get", "patch", "post"]
     queryset = AlertEvent.objects.order_by("-id")
     serializer_class = AlertEventSerializer
     permission_classes = [RbacPermission]
     required_perm = "alert.event.view"
     filterset_fields = ["status", "severity", "device_id"]
+
+    def create(self, request, *args, **kwargs):
+        # 告警事件只由采集/规则引擎生成，禁止通过 API 伪造；保留 POST 仅用于动作路由
+        from rest_framework.exceptions import MethodNotAllowed
+        raise MethodNotAllowed("POST")
 
     @action(detail=True, methods=["post"])
     def ack(self, request, pk=None):
@@ -76,3 +81,23 @@ class AlertEventViewSet(viewsets.ModelViewSet):
         ev.status = "resolved"
         ev.save(update_fields=["status"])
         return Response(AlertEventSerializer(ev).data)
+
+    @action(detail=True, methods=["post"], url_path="create-incident")
+    def create_incident(self, request, pk=None):
+        """告警联动 -> 轻量事件单（apps/change）。body: {note?}"""
+        from apps.change import services as change_services
+        from apps.change.models import IncidentTicket
+        from common.permissions import has_perm
+        from rest_framework.exceptions import PermissionDenied, ValidationError
+
+        ev = self.get_object()
+        if not (request.user.is_superuser or has_perm(request.user, "alert.event.execute")
+                or has_perm(request.user, "change.incident.edit")):
+            raise PermissionDenied("无告警处理权限，无法联动建单")
+        try:
+            res = change_services.create_from_alert(
+                request.user, ev.id, note=request.data.get("note", ""))
+        except ValueError as e:
+            raise ValidationError(str(e))
+        return Response({"incident_id": res["id"], "ticket_no": res["ticket_no"],
+                         "status": res["status"]}, status=201)

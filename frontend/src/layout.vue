@@ -13,6 +13,7 @@
         <el-menu-item index="/ipam"><el-icon><Grid /></el-icon>IP 管理</el-menu-item>
         <el-menu-item index="/devices"><el-icon><Cpu /></el-icon>设备台账</el-menu-item>
         <el-menu-item index="/alerts"><el-icon><Bell /></el-icon>告警中心</el-menu-item>
+        <el-menu-item index="/incidents"><el-icon><Service /></el-icon>事件单</el-menu-item>
         <el-menu-item index="/inspects"><el-icon><List /></el-icon>巡检中心</el-menu-item>
         <el-menu-item index="/system"><el-icon><Setting /></el-icon>系统管理</el-menu-item>
       </el-menu>
@@ -29,7 +30,7 @@
 
 <script setup>
 import { onMounted, ref } from "vue";
-import { Bell, Connection, Cpu, Document, Grid, List, Monitor, OfficeBuilding, Promotion, Setting, Tickets } from "@element-plus/icons-vue";
+import { Bell, Connection, Cpu, Document, Grid, List, Monitor, OfficeBuilding, Promotion, Service, Setting, Tickets } from "@element-plus/icons-vue";
 import api from "./api";
 
 const user = ref({});

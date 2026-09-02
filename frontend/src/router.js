@@ -17,6 +17,7 @@ const routes = [
       { path: "devices", component: () => import("./pages/Devices.vue"), meta: { title: "设备台账" } },
       { path: "devices/:id", component: () => import("./pages/Device360.vue"), meta: { title: "设备 360°" } },
       { path: "alerts", component: () => import("./pages/Alerts.vue"), meta: { title: "告警中心" } },
+      { path: "incidents", component: () => import("./pages/Incidents.vue"), meta: { title: "事件单" } },
       { path: "inspects", component: () => import("./pages/Inspects.vue"), meta: { title: "巡检中心" } },
       { path: "system", component: () => import("./pages/System.vue"), meta: { title: "系统管理" } },
     ],

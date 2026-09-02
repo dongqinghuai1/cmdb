@@ -31,11 +31,12 @@
                 {{ row.status }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="170">
+          <el-table-column label="操作" width="240">
             <template #default="{row}">
               <template v-if="['firing','acknowledged'].includes(row.status)">
                 <el-button size="small" @click.stop="ack(row.id)">确认</el-button>
                 <el-button size="small" type="success" @click.stop="resolve(row.id)">解决</el-button>
+                <el-button size="small" link type="warning" @click.stop="toIncident(row.id)">转事件单</el-button>
               </template>
             </template>
           </el-table-column>
@@ -126,6 +127,11 @@ onMounted(async () => {
 
 const ack = async (id) => { await api.post("/alerts/events/" + id + "/ack/"); ElMessage.success("已确认"); load(page.value); };
 const resolve = async (id) => { await api.post("/alerts/events/" + id + "/resolve/"); ElMessage.success("已解决"); load(page.value); };
+const toIncident = async (id) => {
+  const r = await api.post("/alerts/events/" + id + "/create-incident/", {});
+  ElMessage.success("已创建事件单 " + r.ticket_no);
+  load(page.value);
+};
 
 const createSilence = async () => {
   if (!silForm.all && !silForm.device_ids.length) { ElMessage.warning("请选择设备或选全部"); return; }
