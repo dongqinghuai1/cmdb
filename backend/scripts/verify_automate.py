@@ -71,6 +71,17 @@ def find_script(tok, name):
     return next((s for s in r.get("results", []) if s["name"] == name), None)
 
 
+def wait_run(tok, rid, want=("success", "failed", "cancelled"), limit=80):
+    """异步执行终态等待（容器 worker 队列；sqlite EAGER 立即终态）。返回最后一次响应。"""
+    st, r = call("GET", f"/automate/script-runs/{rid}/", tok)
+    waited = 0
+    while r.get("status") not in want and waited < limit:
+        time.sleep(0.25)
+        waited += 1
+        st, r = call("GET", f"/automate/script-runs/{rid}/", tok)
+    return st, r
+
+
 def main():
     print("== automate 回归 ==")
     admin = login("admin", ADMIN_PWD)
@@ -117,7 +128,7 @@ def main():
        "低危创建无需审批且 pending")
     rid = run["id"]
     st, _ = call("POST", f"/automate/script-runs/{rid}/start/", admin, {}, expect=200)
-    st, r2 = call("GET", f"/automate/script-runs/{rid}/", admin)
+    st, r2 = wait_run(admin, rid)
     stats = r2.get("stats", {})
     ok(r2.get("status") == "success" and stats.get("success") == 2,
        f"低危执行终态 success 2/2 (got {r2.get('status')} {stats})")
@@ -166,7 +177,7 @@ def main():
     st, r2 = call("GET", f"/automate/script-runs/{r['run']['id']}/", admin)
     ok(r2.get("status") == "pending", f"审批通过后转 pending (got {r2.get('status')})")
     st, _ = call("POST", f"/automate/script-runs/{r['run']['id']}/start/", admin, {})
-    st, r3 = call("GET", f"/automate/script-runs/{r['run']['id']}/", admin)
+    st, r3 = wait_run(admin, r["run"]["id"])
     ok(r3.get("status") == "success", f"审批后执行成功 (got {r3.get('status')})")
 
     # 驳回路径
@@ -194,7 +205,7 @@ def main():
        f"灰度中 running done=1 (got {r2.get('status')} {r2.get('stats')})")
     st, res2 = call("POST", f"/automate/script-runs/{gr['id']}/continue/", admin, {})
     ok(res2.get("dispatched") == 2 and res2.get("gray_remaining") == 0, "剩余两台继续下发")
-    st, r3 = call("GET", f"/automate/script-runs/{gr['id']}/", admin)
+    st, r3 = wait_run(admin, gr["id"])
     ok(r3.get("status") == "success" and r3.get("stats", {}).get("success") == 3,
        f"灰度全部完成 success 3/3 (got {r3.get('status')} {r3.get('stats')})")
 

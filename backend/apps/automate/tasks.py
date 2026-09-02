@@ -119,3 +119,10 @@ def execute_run(run_id, device_ids):
         executed += 1
     res = finalize_run(run_id)
     return {"run": run_id, "executed": executed, "skipped": skipped, **res}
+
+
+@shared_task(name="automate.firmware_upgrade")
+def firmware_upgrade(plan_id: int, mock: bool = False):
+    """固件升级作业：mock=True 全流程演练（不触网）；mock=False 只读预检+步骤编排（v1 不自动刷写）。"""
+    from apps.automate.services import execute_firmware_engine
+    return execute_firmware_engine(plan_id, bool(mock))

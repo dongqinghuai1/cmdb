@@ -1,6 +1,6 @@
 # 交接文档（面向下一个开发智能体）
 
-> 最后更新：M2026-09-19（安全基线闭环，见文末 §34）。
+> 最后更新：M2026-09-20（固件升级编排 v1，见文末 §35）。
 > 一期+二期已完成并实测通过；三期「自动化运维」（M2026-09-02）、「轻量事件单」（M2026-09-02b）、「轻量变更单」（M2026-09-02c）、「CMDB 基础补齐 R1/R2/R3」（M2026-09-03/03b/03c）、「资产生命周期」（M2026-09-03d）已上线，见文末里程碑。
 > 读完本文 + DEPLOY.md + DEVELOPMENT.md 即可接手。
 
@@ -38,7 +38,7 @@
 ## 3. 待办清单（按 PRD 路线图）
 
 **二期**：syslog 接收+日志检索、NCM 配置备份/diff、拓扑(~~LLDP 自动发现~~ ✅M2026-09-17；G6 手工布局保存待办)、AP 台账同步、告警收敛/静默(~~占用静默+复燃窗口合并~~ ✅M2026-09-18；根因抑制/变更窗口自动静默待)、IPAM、飞书 SSO、Prometheus remote_write、路由快照采集（~~change_ticket 轻量变更单~~ ✅ 已于三期补齐，见 M2026-09-02c）
-**三期**：~~自动化运维~~ ✅、~~轻量事件单~~ ✅、~~轻量变更单(二期欠账)~~ ✅、~~线缆与 LLDP 比对~~ ✅（M2026-09-17）、固件升级/值班(~~值班排班 DutySchedule API~~ ✅M2026-09-18b；固件升级计划待)、~~安全基线~~ ✅（M2026-09-19）；剩余：资产生命周期+保修/借用、报表中心、PDU 电源、虚机 vCenter 同步
+**三期**：~~自动化运维~~ ✅、~~轻量事件单~~ ✅、~~轻量变更单(二期欠账)~~ ✅、~~线缆与 LLDP 比对~~ ✅（M2026-09-17）、~~固件升级/值班~~ ✅（值班 M2026-09-18b / 固件升级编排 M2026-09-20）、~~安全基线~~ ✅（M2026-09-19）；剩余：资产生命周期+保修/借用、报表中心、PDU 电源、虚机 vCenter 同步
 **四期**：AI（LLM 网关已留 settings.LLM_*、NL2Query、根因分析、ChatOps 飞书机器人、RAG）
 **技术债**：ai/report 骨架 app 补全；巡检只实现了 2 种检查类型（online 状态/接口错包阈值）；collect_shard 需要真实 SNMP 设备联调；audit_log/log_record/login_event 分区表转换（ER D12）；事件单超时仅时间线提醒（飞书/升级未接）
 
@@ -79,6 +79,7 @@
 | **verify_alert_converge.py** | **告警收敛/静默增强：借出自动静默+归还释放 / 占用期不触发 / 窗口内复燃合并同一事件(不重开) / 窗口0复燃新建事件 / 手动评估与 resolve 时间戳 / 权限负例 / purge 清事件孤儿(保留被事件单引用)** | **18 PASS（sqlite 与容器 PG 各一遍）** |
 | **verify_duty.py** | **值班排班 DutySchedule API：view/edit 双码门禁 / 排班 CRUD / 同人同日同班次重复 400 / 日历视图(月聚合主备班) / 交班置时间戳 / 审计链 / 清理幂等** | **19 PASS（sqlite 与容器 PG 各一遍）** |
 | **verify_baseline.py** | **安全基线闭环：规则库 seed(5 条) / scope(驱动·设备)生效 / 全规则核查统计 / 违规联动告警 / 修复即自动恢复 / 汇总端点 / purge 清 NCM 孤儿 / 权限负例** | **15 PASS（sqlite 与容器 PG 各一遍）** |
+| **verify_firmware.py** | **固件升级编排：固件库 CRUD+重名400 / 计划快照+设备名 / 进行中同设备防重 / confirm 门禁 / mock 演练(异步轮询至终态) / 真实预检无凭据->failed / 状态机 cancel 边界 / 总览计数 / purge 清计划 / 权限正负例** | **20 PASS（sqlite 与容器 PG 各一遍）** |
 | smoke_test.py | 端口级冒烟（登录->建柜->上架->冲突） | 10 PASS |
 | seed_demo.py | 演示数据：2 地区/2 机房/3 机柜/10 设备 | 幂等 |
 | seed_floorplan.py | 上海机房平面图示例布局 | 幂等 |
@@ -505,3 +506,15 @@
 - **配套**：设备 purge 扩展清理 NCM 域裸外键残留 `ConfigBackup / ConfigChangeEvent / BaselineCheckResult`（与 LLDP 邻居、AlertEvent 同规则，防孤儿堆积）。
 - **验证**：`scripts/verify_baseline.py` **15 PASS ×2**（sqlite/容器 PG）：seed 规则在位 → 造 h3c/fortigate 设备+导入含 public 团体/telnet 的坏配置 → 核查统计与违规明细含 Telnet/SNMP 规则 → 告警 firing 开 → 修复导入后自动 resolved + compliant → driver/device 两类 scope 只查目标设备 → summary 结构 → purge 后事件/备份/结果孤儿清零 → auditor 负例。回归：verify_ncm 8、api_test 33（PG）保持。
 - **待办/坑**：① seed 规则为通用网络设备加固集，生产可按厂商/型号细化并用 scope 定向（driver_types/device_ids）；② 周期核查任务依赖有配置备份的设备，备份频率目前仅每日 02:30 一次——基线严格度受备份新鲜度上限约束；③ 违规告警暂不主动推送渠道（事件已入中心、可走既有升级/转单），如需飞书即时提醒接 M32 通知链；④ 基线"历史曲线"（规则×设备违规随时间趋势）与前端合规页(按规则下钻设备清单)待做。
+
+---
+
+## 35. 里程碑 M2026-09-20：固件升级编排 v1（automate 域，补完"固件升级/值班"对）
+
+- **范围**：automate 注释里挂了两个 ER P2 骨架之一落地（另一个 Job/JobRun 任务编排仍待）。价值主张 = **升级前风险闭环**：固件库登记(sha256/适用型号) → 按设备建计划(包信息快照) → mock 全流程演练或真实只读预检(版本比对+步骤编排) → 结果留痕/审计。**v1 不自动下发刷写命令**（防生产误刷，模板校准后放开 force）。
+- **模型**（`automate.0002`，makemigrations 生成）：`FirmwarePackage`（name 唯一 / vendor / hw_model / version / file_name / file_size / sha256 / notes）；`FirmwareUpgradePlan`（device_id·package_id 裸外键、包信息快照、current_version、状态机 pending→ready(预检通过待窗口)|success(演练)|failed|cancelled、scheduled_at 可选窗口、result_log/error、执行人/创建人）。跨 App 不建 FK、函数内延迟导入等纪律对齐本 app。
+- **服务/任务**：`automate/services.py::create_firmware_plan`（设备存在/包存在/**同设备进行中计划防重** + 审计）、`execute_firmware_engine(plan_id, mock)`（mock=演练日志；真实=netmiko 只读 `show/display version` → 版本比对 → 相同置 success / 不同置 ready + 步骤编排，缺 IP/凭据置 failed 不触网）、`cancel_firmware_plan`（仅 pending/ready/failed）。异步任务 `automate.firmware_upgrade`（worker 队列，随 automate.* 路由 ssh；EAGER 环境内联）。
+- **端点** `/api/v1/automate/firmware-packages|firmware-upgrades/`：库 CRUD（重名 400、被计划引用的包禁删）；计划 GET/POST/DELETE（读 `automate.run.view`，写/执行/取消 `automate.run.execute` 或超管——sys_demo 读可见/写 403 正负例覆盖）；`POST /{id}/execute/` 需 `confirm=true` 二次确认 + `{mock:0|1}`；`POST /{id}/cancel/`；`GET .../firmware-upgrades/summary/` 按状态计数+每设备最近一次对照。
+- **配套**：cmdb purge 清理 automate 域裸外键计划残留（与 M31/32/34 同规则）；`verify_automate.py` 三处"触发后即读终态"的异步竞态改为轮询等待（容器 worker 队列，任务本身 ms 级完成）。
+- **验证**：`scripts/verify_firmware.py` **20 PASS ×2**（sqlite/容器 PG）：权限读门 3 例 → 包建/重名 → 设备+计划快照 → 无 execute 建计划 403 / 进行中防重 400 → confirm 门禁 → mock 演练 success+日志 → success 不可取消 → 真实预检无凭据 failed(提示) → pending 取消/重复取消 400 → summary 计数 → purge 清计划 → 删包。回归：verify_automate 33（含轮询修复）、api_test 33（PG）保持。
+- **待办/坑**：① 真实"刷写下发"模板（H3C boot-loader / 思科 install add+reload 校验）与 force 开关、变更单(change_ticket)联动审批、升级窗口(值班日历 scheduled_at)提醒是下一阶；② result_log 现为明文 TextField，接入 MinIO/加密（同 ScriptRunDetail 演进）时一并迁移；③ 固件上传文件本体仍未入库（登记制），交付物存储待 MinIO；④ Job/JobRun 任务编排仍为 P2 骨架。

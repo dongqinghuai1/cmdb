@@ -306,3 +306,138 @@ def finalize_run(run_id: int) -> dict:
         run.gray_batch["dispatched"] = run.gray_batch.get("total", 0)
     run.save(update_fields=["status", "summary", "finished_at", "gray_batch", "updated_at"])
     return {"status": run.status, "ok": ok, "failed": bad}
+
+
+# ============ 固件升级（FirmwarePackage / FirmwareUpgradePlan） ============
+
+FW_DRIVER_MAP = {  # 真实预检 netmiko device_type（h3c/cisco/fortigate 常用子集）
+    "h3c_comware": "hp_comware",
+    "cisco_ios": "cisco_ios",
+    "cisco_asa": "cisco_asa",
+    "cisco_wlc_3504": "cisco_wlc",
+    "cisco_wlc_9800": "cisco_wlc",
+    "fortigate": "fortinet",
+}
+
+
+def create_firmware_plan(user, data, source_ip: str = ""):
+    """建固件升级计划（单设备）。校验设备存在、包存在、无进行中的同设备计划。"""
+    from common.audit import write_audit
+    from apps.automate.models import FirmwarePackage, FirmwareUpgradePlan
+    dev_id = int(data.get("device_id") or 0)
+    pkg_id = int(data.get("package_id") or 0)
+    if not dev_id or not pkg_id:
+        raise ValueError("device_id / package_id 必填")
+    dev = fetch_device_row(dev_id)
+    if not dev:
+        raise ValueError("设备不存在或已删除")
+    pkg = FirmwarePackage.objects.filter(pk=pkg_id).first()
+    if not pkg:
+        raise ValueError("固件包不存在")
+    active = FirmwareUpgradePlan.objects.filter(
+        device_id=dev_id,
+        status__in=(FirmwareUpgradePlan.Status.PENDING,
+                    FirmwareUpgradePlan.Status.READY,
+                    FirmwareUpgradePlan.Status.RUNNING)).exists()
+    if active:
+        raise ValueError("该设备已有进行中的升级计划（待执行/待窗口/执行中），先处理再建")
+    plan = FirmwareUpgradePlan.objects.create(
+        device_id=dev_id, package_id=pkg_id,
+        package_name_snapshot=pkg.name, package_version_snapshot=pkg.version,
+        current_version=(data.get("current_version") or "").strip(),
+        scheduled_at=data.get("scheduled_at") or None,
+        created_by_id=user.id)
+    write_audit(user, "create", "FirmwareUpgradePlan", plan.pk,
+                after={"device_id": dev_id, "package": pkg.name,
+                       "version": pkg.version}, source_ip=source_ip)
+    return plan
+
+
+def execute_firmware_engine(plan_id: int, mock: bool):
+    """升级作业引擎（celery worker 或 EAGER 内联执行）：
+    - mock=True：全流程演练（预检/版本比对/步骤编排），不触网不刷机；
+    - mock=False：真实只读预检(show version)+步骤编排 → ready（**v1 不自动下发刷写**，
+      待模板校准/人工窗口后放开 force；防生产误刷）。
+    """
+    from apps.automate.models import FirmwareUpgradePlan
+    plan = FirmwareUpgradePlan.objects.filter(pk=plan_id).first()
+    if not plan:
+        return {"status": "missing"}
+    now = timezone.now()
+    if plan.status != FirmwareUpgradePlan.Status.RUNNING:
+        plan.status = FirmwareUpgradePlan.Status.RUNNING
+    plan.save(update_fields=["status", "updated_at"])
+    dev = fetch_device_row(plan.device_id)
+    lines = []
+    err = ""
+    if not dev:
+        err = "设备不存在或已删除"
+        plan.status = FirmwareUpgradePlan.Status.FAILED
+        plan.error, plan.executed_at = err, now
+        plan.save(update_fields=["status", "error", "executed_at", "updated_at"])
+        return {"id": plan.id, "status": plan.status, "error": err}
+    target = plan.package_version_snapshot or "-"
+    lines.append(f"[{('mock' if mock else 'precheck')}] device={dev['name']}({dev['manage_ip'] or '-'})"
+                 f" driver={dev['driver_type'] or '-'}")
+    if mock:
+        cur = plan.current_version or "7.1.070, Release R6628"
+        lines.append(f"[mock] 当前版本 {cur}，目标版本 {target}")
+        if cur == target:
+            lines.append("[mock] 已在目标版本，无需升级")
+            plan.status = FirmwareUpgradePlan.Status.SUCCESS
+        else:
+            lines.append("[mock] 步骤编排（演练）：1) 上传镜像 2) 指定启动项 3) 窗口内重启生效")
+            lines.append("[mock] 演练完成 → 标记成功（真实刷写不在此态执行）")
+            plan.status = FirmwareUpgradePlan.Status.SUCCESS
+    else:
+        if not dev["manage_ip"] or not dev["credential_id"]:
+            err = "设备缺少管理 IP/凭据，无法真实预检（可先 mock=1 演练）"
+            plan.status = FirmwareUpgradePlan.Status.FAILED
+        else:
+            try:
+                from apps.system.models import Credential
+                import netmiko
+                cred = Credential.objects.filter(pk=dev["credential_id"]).first()
+                conn = {"device_type": FW_DRIVER_MAP.get(dev["driver_type"], "cisco_ios"),
+                        "host": dev["manage_ip"], "username": cred.username or "admin",
+                        "password": cred.secret, "timeout": 12}
+                show = ("display version" if conn["device_type"] == "hp_comware"
+                        else "show version")
+                with netmiko.ConnectHandler(**conn) as n:
+                    out = n.send_command(show)
+                head = next((l for l in out.splitlines() if l.strip()), "")
+                lines.append(f"[precheck] {head[:160]}")
+                plan.current_version = head[:64]
+                if head and target and target in out:
+                    lines.append("已在目标版本，无需升级")
+                    plan.status = FirmwareUpgradePlan.Status.SUCCESS
+                else:
+                    lines.append("预检通过，刷写步骤已编排（未自动下发，待窗口人工执行/后续 force 模板校准）")
+                    plan.status = FirmwareUpgradePlan.Status.READY
+            except Exception as e:
+                err = f"预检失败：{e}"
+                plan.status = FirmwareUpgradePlan.Status.FAILED
+        if err:
+            plan.error = err[:1000]
+    plan.result_log = "\n".join(lines)
+    plan.executed_at = now
+    plan.save(update_fields=["status", "result_log", "error", "current_version",
+                             "executed_at", "updated_at"])
+    return {"id": plan.id, "status": plan.status,
+            "log": plan.result_log, "error": plan.error}
+
+
+def cancel_firmware_plan(user, plan, reason: str = "", source_ip: str = ""):
+    """取消计划：仅 pending/ready/failed 可取消（成功态为演练终态，保留历史）。"""
+    from common.audit import write_audit
+    from apps.automate.models import FirmwareUpgradePlan
+    if plan.status not in (FirmwareUpgradePlan.Status.PENDING,
+                           FirmwareUpgradePlan.Status.READY,
+                           FirmwareUpgradePlan.Status.FAILED):
+        raise ValueError(f"当前状态 {plan.status} 不可取消（仅 pending/ready/failed）")
+    plan.status = FirmwareUpgradePlan.Status.CANCELLED
+    plan.result_log = (plan.result_log or "") + f"\n[cancel] {reason or '手动取消'}"
+    plan.save(update_fields=["status", "result_log", "updated_at"])
+    write_audit(user, "execute", "FirmwareUpgradePlan", plan.pk,
+                after={"status": plan.status, "reason": reason}, source_ip=source_ip)
+    return {"id": plan.id, "status": plan.status}

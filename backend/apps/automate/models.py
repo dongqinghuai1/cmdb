@@ -5,7 +5,7 @@
   （对齐 ncm/ipam 惯例，DB 层无约束，归属校验在 services/views 层做）。
 - script_run.content_snapshot 与 detail.output 先内联加密存 PG（EncryptedTextField，同 NCM
   配置备份思路）；MinIO 对象存储接入后迁 output_url（见 HANDOVER 技术债）。
-- Job/JobRun（任务编排）与 FirmwareUpgradePlan（固件升级作业）为 ER P2 骨架，后续里程碑再落地。
+- Job/JobRun（任务编排）为 ER P2 骨架，后续里程碑再落地；FirmwareUpgradePlan/固件库见本文件下方（M2026-09-20 落地）。
 """
 from django.db import models
 
@@ -149,3 +149,63 @@ class ScriptRunDetail(TimeStampedModel):
 
     def __str__(self):
         return f"run#{self.run_id} dev#{self.device_id} {self.status}"
+
+
+class FirmwarePackage(TimeStampedModel):
+    """固件版本库（升级目标物）。上传文件先不入库：file_name/sha256 登记 + 交付物转 MinIO 技术债。"""
+
+    name = models.CharField(max_length=128, unique=True)
+    vendor = models.CharField(max_length=32, blank=True)
+    hw_model = models.CharField(max_length=64, blank=True, help_text="适用硬件型号（支持通配 S51*）")
+    version = models.CharField(max_length=64)
+    file_name = models.CharField(max_length=255, blank=True)
+    file_size = models.BigIntegerField(default=0)
+    sha256 = models.CharField(max_length=64, blank=True)
+    notes = models.TextField(blank=True)
+    created_by_id = models.BigIntegerField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        verbose_name = "固件版本"
+
+    def __str__(self):
+        return f"{self.name}@{self.version}"
+
+
+class FirmwareUpgradePlan(TimeStampedModel):
+    """固件升级计划/作业（单设备）。生命周期：
+    pending ->(execute 预检) ready|failed|success
+    pending/ready/failed -> cancelled；success 仅 mock 演练态（真实刷写留人工窗口/后续 force）。
+
+    跨 App 不建外键：device_id/package_id/created_by_id/executed_by_id 裸 BigIntegerField；
+    package 信息在创建时快照（改名/删除不影响历史计划）。
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "待执行"
+        READY = "ready", "预检通过待刷写窗口"
+        RUNNING = "running", "执行中"
+        SUCCESS = "success", "成功(演练)"
+        FAILED = "failed", "失败"
+        CANCELLED = "cancelled", "已取消"
+
+    device_id = models.BigIntegerField(db_index=True)
+    package_id = models.BigIntegerField(null=True, blank=True)
+    package_name_snapshot = models.CharField(max_length=128, blank=True)
+    package_version_snapshot = models.CharField(max_length=64, blank=True)
+    current_version = models.CharField(max_length=64, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices,
+                              default=Status.PENDING, db_index=True)
+    scheduled_at = models.DateTimeField(null=True, blank=True, help_text="计划执行窗口(可选)")
+    executed_at = models.DateTimeField(null=True, blank=True)
+    result_log = models.TextField(blank=True, help_text="预检/演练回显（真实回显加密接入后改密文）")
+    error = models.TextField(blank=True)
+    executed_by_id = models.BigIntegerField(null=True, blank=True)
+    created_by_id = models.BigIntegerField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "固件升级计划"
+
+    def __str__(self):
+        return f"fw#{self.id} dev#{self.device_id} {self.status}"
