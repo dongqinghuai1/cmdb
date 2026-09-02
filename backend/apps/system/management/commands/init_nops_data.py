@@ -52,6 +52,8 @@ class Command(BaseCommand):
             ("change.ticket.edit", "变更申请/提交", "变更管理", "edit"),
             ("change.ticket.execute", "变更实施/验证/关闭", "变更管理", "execute"),
             ("change.ticket.approve", "变更审批", "变更管理", "approve"),
+            ("report.snapshot.view", "报表快照查看", "报表中心", "view"),
+            ("report.snapshot.edit", "报表生成/订阅编辑", "报表中心", "edit"),
             # 导航权限点（menu.*）：供 RBAC 动态菜单按角色过滤，非功能门禁（后端仍按功能码拦截）
             ("menu.home", "工作台导航", "工作台", "view"),
             ("menu.monitor", "监控告警导航", "监控与告警", "view"),
@@ -71,7 +73,7 @@ class Command(BaseCommand):
         admin_role.permissions.set(Permission.objects.all())
         netops, _ = Role.objects.get_or_create(code="net_ops", defaults={"name": "网络运维", "builtin": True})
         netops.permissions.set(Permission.objects.filter(
-            Q(code__regex=r"^(dcim|cmdb|monitor|alert|inspect|automate|change)\.") |
+            Q(code__regex=r"^(dcim|cmdb|monitor|alert|inspect|automate|change|report)\.") |
             Q(code__startswith="menu.")))
         readonly, _ = Role.objects.get_or_create(code="readonly", defaults={"name": "只读", "builtin": True})
         readonly.permissions.set(Permission.objects.filter(action="view"))
@@ -85,13 +87,14 @@ class Command(BaseCommand):
 
         _persona("net_admin", "网络管理员", [
             "cmdb.device.view", "dcim.region.view", "dcim.rack.view",
-            "alert.event.view", "change.ticket.view",
+            "alert.event.view", "change.ticket.view", "report.snapshot.view",
         ], ["menu.home", "menu.monitor", "menu.net", "menu.asset", "menu.dcim", "menu.workflow"])
         _persona("sys_admin", "系统运维", [
             "cmdb.device.view", "cmdb.model.view", "monitor.collector.view", "monitor.log.view",
             "alert.event.view", "alert.rule.view", "inspect.template.view", "inspect.run.view",
             "automate.script.view", "automate.run.view", "change.incident.view",
             "system.duty.view", "system.duty.edit",
+            "report.snapshot.view", "report.snapshot.edit",
         ], ["menu.home", "menu.monitor", "menu.asset", "menu.dcim", "menu.workflow", "menu.log"])
         _persona("dcim_admin", "机房运维", [
             "cmdb.device.view", "cmdb.device.edit", "cmdb.device.execute",
