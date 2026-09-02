@@ -11,6 +11,7 @@ const routes = [
       { path: "dcim", component: () => import("./pages/Dcim.vue"), meta: { title: "机房管理" } },
       { path: "topo", component: () => import("./pages/Topo.vue"), meta: { title: "拓扑管理" } },
       { path: "ncm", component: () => import("./pages/Ncm.vue"), meta: { title: "配置管理" } },
+      { path: "automate", component: () => import("./pages/Automate.vue"), meta: { title: "自动化运维" } },
       { path: "logs", component: () => import("./pages/Logs.vue"), meta: { title: "日志中心" } },
       { path: "ipam", component: () => import("./pages/Ipam.vue"), meta: { title: "IP 管理" } },
       { path: "devices", component: () => import("./pages/Devices.vue"), meta: { title: "设备台账" } },

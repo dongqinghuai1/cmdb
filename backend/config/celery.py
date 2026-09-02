@@ -10,9 +10,15 @@ app = Celery("nops")
 app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
 
+# 本地开发/CI：NOPS_EAGER=1 时任务同步内联执行，无需 broker/worker
+if os.environ.get("NOPS_EAGER") == "1":
+    app.conf.task_always_eager = True
+    app.conf.task_eager_propagates = False
+
 # ---- 队列：ssh 长任务独立，防 SSH 黑洞卡死全部 worker ----
 app.conf.task_routes = {
     "ncm.*": {"queue": "ssh"},
+    "automate.*": {"queue": "ssh"},
     "monitor.collect_*": {"queue": "nops"},
     "alert.*": {"queue": "nops"},
     "inspect.*": {"queue": "nops"},

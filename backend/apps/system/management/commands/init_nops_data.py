@@ -38,6 +38,11 @@ class Command(BaseCommand):
             ("inspect.template.edit", "巡检模板编辑", "巡检中心", "edit"),
             ("inspect.run.view", "巡检记录", "巡检中心", "view"),
             ("inspect.run.execute", "执行巡检", "巡检中心", "execute"),
+            ("automate.script.view", "脚本查看", "自动化运维", "view"),
+            ("automate.script.edit", "脚本编辑", "自动化运维", "edit"),
+            ("automate.run.view", "执行记录查看", "自动化运维", "view"),
+            ("automate.run.execute", "批量执行", "自动化运维", "execute"),
+            ("automate.approve", "审批处理", "自动化运维", "execute"),
         ]
         for code, name, menu, action in perms:
             Permission.objects.get_or_create(code=code, defaults={"name": name, "menu": menu, "action": action})
@@ -46,7 +51,8 @@ class Command(BaseCommand):
         admin_role, _ = Role.objects.get_or_create(code="admin", defaults={"name": "系统管理员", "builtin": True})
         admin_role.permissions.set(Permission.objects.all())
         netops, _ = Role.objects.get_or_create(code="net_ops", defaults={"name": "网络运维", "builtin": True})
-        netops.permissions.set(Permission.objects.filter(code__regex=r"^(dcim|cmdb|monitor|alert|inspect)\."))
+        netops.permissions.set(Permission.objects.filter(
+            code__regex=r"^(dcim|cmdb|monitor|alert|inspect|automate)\."))
         readonly, _ = Role.objects.get_or_create(code="readonly", defaults={"name": "只读", "builtin": True})
         readonly.permissions.set(Permission.objects.filter(action="view"))
 

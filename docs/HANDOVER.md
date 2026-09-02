@@ -1,6 +1,8 @@
 # 交接文档（面向下一个开发智能体）
 
-> 最后更新：一期交付完成时。读完本文 + DEPLOY.md + DEVELOPMENT.md 即可接手。
+> 最后更新：2026-09-02（automate 三期首模块上线）。
+> 一期+二期已完成并实测通过；三期「自动化运维」首模块（脚本库/批量执行/灰度/审批）已上线，见文末里程碑 M2026-09-02。
+> 读完本文 + DEPLOY.md + DEVELOPMENT.md 即可接手。
 
 ## 1. 当前状态总览
 
@@ -15,7 +17,8 @@
 | usage | ✅ 完成 | 占用/预约(时间窗排他)、LoginEvent 表 |
 | alert | ✅ 骨架 | 规则引擎(metric/state)、dedup_key 去重、飞书通知、ack/resolve 闭环 |
 | inspect | ✅ 骨架 | 模板/检查项、执行任务、异常转告警(共用事件表) |
-| 其余 7 app | ⬜ 骨架 | topo/ncm/ipam/automate/change/ai/report：仅空壳 models + 空路由，**模型定义见 ER 文档 4.8-4.16** |
+| automate | ✅ 三期首模块 | 脚本库 / 高危审批 / 批量执行(灰度批次) / 逐台明细（ER 4.12；Ansible/任务编排/固件升级 P2 待落地） |
+| 其余 | ⬜ 骨架 | change / ai / report：空壳 models + 空路由，模型定义见 ER 4.13/4.15/4.16 |
 
 **前端**：登录/工作台/机房管理(树+平面图+U位)/设备台账+360/告警/巡检/系统管理，全部可用。
 
@@ -55,10 +58,16 @@
 
 | 脚本 | 用途 | 基线 |
 |---|---|---|
-| api_test.py | 核心 CRUD 全链路（幂等，自动清理） | 33 PASS |
+| api_test.py | 核心 CRUD 全链路（幂等，自动清理） | 33 PASS（PG+constraints.sql 环境） |
 | verify_errors.py | 错误场景/引用删除/增改删往返 | 22 PASS |
 | verify_ghost.py | 软删除幽灵设备不阻塞位置删除 | 4 PASS |
 | verify_edit.py | 设备位置编辑（换柜/冲突/下架） | 7 PASS |
+| verify_collect.py | 真实采集链路(SNMP/ICMP) | 6 PASS |
+| verify_ipam.py | IPAM 地址/VLAN 闭环 | PASS |
+| verify_ncm.py | NCM 备份/基线 | 8 PASS |
+| verify_syslog.py | Syslog 收流/检索/限流 | PASS |
+| verify_silence_ap.py | 告警静默 + AP 台账同步 | 7 PASS |
+| **verify_automate.py** | **自动化运维：脚本 CRUD / 高危审批闭环 / 灰度批次 / 取消 / 权限护栏** | **33 PASS** |
 | smoke_test.py | 端口级冒烟（登录->建柜->上架->冲突） | 10 PASS |
 | seed_demo.py | 演示数据：2 地区/2 机房/3 机柜/10 设备 | 幂等 |
 | seed_floorplan.py | 上海机房平面图示例布局 | 幂等 |
@@ -86,3 +95,27 @@
 | 平面图新元素类型 | frontend FloorPlan.vue 的 TYPES 数组 + .obj.<type> 样式 |
 | 加菜单/页面 | frontend router.js + layout.vue + pages/ |
 | 加周期任务 | 对应 app tasks.py 用 shared_task + config/celery.py register_beat |
+| 加脚本库/执行规则 | apps/automate/{models,services,tasks,views}.py（ER 4.12） |
+
+---
+
+## 8. 里程碑 M2026-09-02：三期 automate 首模块上线
+
+**范围（PRD 5.12 子集）**：命令/脚本库、批量执行（含**灰度：先 1 台→人工确认→继续剩余**）、高危脚本强制**审批流**（通用 Approval 表，预留 change_ticket 复用）、逐台执行明细与回显、操作全程审计。
+
+**后端** `backend/apps/automate/`（迁移 0001 四张表）：
+- `Script`（content AES-GCM 加密存 `EncryptedTextField`，`danger_level=high → requires_approval`）
+- `Approval`（通用：biz_type script_run/change_ticket）
+- `ScriptRun`（快照执行内容加密 + scope + gray_batch{enabled,total,dispatched}，状态机见 models docstring）
+- `ScriptRunDetail`（output 先内联加密存 PG，偏差同 NCM 思路，MinIO 接入后迁 output_url）
+- 状态机：`pending→running→success|failed|partial_success`；`approving→(批)pending/(驳)cancelled`；pending/approving 可取消
+- **执行器**：`tasks.execute_run` 走 SSH 队列（config/celery.py `automate.*→ssh`），netmiko 直连（CLI/shell/python；Ansible 未接入，创建即拦截提示）
+- **模拟开关**：系统配置 `automate.mock_execute={enabled:true}` 时执行走 mock（无真实设备演示/CI）；本地回归 `NOPS_EAGER=1` 让 celery 同步内联执行免 broker/worker
+- **权限点**（init_nops_data 幂等）：`automate.script.view/edit`、`automate.run.view/execute`、`automate.approve`；net_ops 角色已授 automate.*
+- **API**：`/api/v1/automate/scripts|script-runs|approvals`（script-runs 含 start/continue/cancel/details 动作；approvals 含 approve/reject；审批单对 approver/applicant 身份可见，细粒度在 decide_approval）
+
+**前端** `frontend/src/pages/Automate.vue`：四个页签——脚本库（CRUD/启用/危险级标识）、发起执行（脚本+设备多选+灰度+高危选审批人）、执行历史（进度/摘要/灰度继续/取消/明细抽屉）、我的审批（通过/驳回）。路由 `/automate` + 侧栏"自动化运维"。
+
+**验证**：`scripts/verify_automate.py` 33 PASS（幂等；含无权限 403/越权 404、审批人视角、驳回留痕、灰度 3 台分批）。本地命令：`NOPS_DB=sqlite NOPS_EAGER=1 manage.py runserver` + 预置 `mgr_approver/NopsTest@2025` 审批账号与 mock 开关。
+
+**待办/坑**：① Ansible 执行器未接入；② Job 任务编排、固件升级作业计划（ER P2）未建表；③ api_test.py 在**sqlite**（无 constraints.sql EXCLUDE）下会遗留 T-DUP 幽灵设备导致末两步删 site/region 400，属环境差异，PG 容器正常（回归用容器跑）；④ 审批飞书卡片通知未接（占位 send_notification 体系）。
