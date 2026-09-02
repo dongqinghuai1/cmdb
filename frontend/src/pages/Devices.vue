@@ -17,6 +17,8 @@
       <el-button @click="openCreate">新增设备</el-button>
       <el-button type="warning" @click="collectAll">立即采集</el-button>
       <el-button @click="exportXlsx">导出 Excel</el-button>
+      <el-button type="primary" plain @click="openQuality">质量看板</el-button>
+      <el-button type="danger" plain @click="openRecycle">回收站</el-button>
       <el-upload :show-file-list="false" :http-request="importXlsx" accept=".xlsx"
                  style="display:inline-block">
         <el-button>导入 Excel</el-button>
@@ -96,6 +98,47 @@
       <el-button @click="dlg=false">取消</el-button>
       <el-button type="primary" @click="save">保存</el-button>
     </template>
+  </el-dialog>
+
+  <!-- 数据质量看板（PRD 5.5.6） -->
+  <el-dialog v-model="qualityDlg" title="数据质量看板" width="860px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <el-tag v-for="k in QK" :key="k.k" :type="qkind===k.k?'primary':'info'" class="qtag"
+              @click="pickKind(k.k)">
+        {{ k.l }}：{{ qsum[k.k] ?? "-" }}
+      </el-tag>
+      <el-tag type="success">缺失合计：{{ qTotal }}</el-tag>
+    </div>
+    <el-table :data="qrows" size="small" stripe max-height="420">
+      <el-table-column prop="name" label="设备" min-width="140" />
+      <el-table-column prop="vendor" label="品牌" width="90" />
+      <el-table-column prop="hw_model" label="型号" width="120" />
+      <el-table-column prop="sn" label="SN" min-width="120" />
+      <el-table-column prop="manage_ip" label="管理IP" width="120" />
+      <el-table-column label="位置" min-width="140">
+        <template #default="{row}">{{ row.region__name }} / {{ row.site__name }} {{ row.rack__name || "" }}</template>
+      </el-table-column>
+      <el-table-column prop="owner__username" label="责任人" width="90" />
+      <el-table-column prop="warranty_until" label="保修到期" width="110" />
+    </el-table>
+  </el-dialog>
+
+  <!-- 回收站（PRD 5.5.2 P1） -->
+  <el-dialog v-model="recycleDlg" title="设备回收站（软删除，可恢复）" width="820px">
+    <el-table :data="rcRows" size="small" stripe max-height="440">
+      <el-table-column prop="name" label="名称" min-width="120" />
+      <el-table-column prop="sn" label="SN" min-width="120" />
+      <el-table-column prop="manage_ip" label="管理IP" width="120" />
+      <el-table-column label="位置" min-width="150">
+        <template #default="{row}">{{ row.region_name }} / {{ row.site_name }} {{ row.rack_name ? "·" + row.rack_name : "" }}</template>
+      </el-table-column>
+      <el-table-column label="操作" width="170">
+        <template #default="{row}">
+          <el-button size="small" type="success" link @click="restoreDev(row)">恢复</el-button>
+          <el-button size="small" type="danger" link @click="purgeDev(row)">彻底删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
   </el-dialog>
 </template>
 
@@ -209,4 +252,46 @@ const remove = async (row) => {
   } catch (e) { /* 取消或后端提示 */ }
 };
 import { ElMessageBox } from "element-plus";
+
+const QK = [
+  { k: "no_sn", l: "无SN" }, { k: "no_owner", l: "无责任人" },
+  { k: "no_warranty", l: "无保修" }, { k: "no_vendor", l: "无品牌" },
+  { k: "no_sw_version", l: "无版本" }, { k: "no_rack", l: "未上架(非虚机)" },
+  { k: "no_manage_ip", l: "无管理IP(非虚机)" },
+];
+const qualityDlg = ref(false);
+const qsum = ref({});
+const qrows = ref([]);
+const qkind = ref("no_sn");
+const qTotal = ref(0);
+const openQuality = async () => {
+  qualityDlg.value = true;
+  await refreshQuality("no_sn");
+};
+const refreshQuality = async (k) => {
+  const r = await api.get("/cmdb/devices/data-quality/", { params: { kind: k } });
+  qsum.value = r.summary || {}; qrows.value = r.rows || []; qTotal.value = r.total || 0;
+};
+const pickKind = async (k) => { qkind.value = k; await refreshQuality(k); };
+
+const recycleDlg = ref(false);
+const rcRows = ref([]);
+const openRecycle = async () => {
+  recycleDlg.value = true;
+  const r = await api.get("/cmdb/devices/", { params: { deleted: 1, page_size: 500 } });
+  rcRows.value = r.results || [];
+};
+const restoreDev = async (row) => {
+  await ElMessageBox.confirm("确认恢复设备「" + row.name + "」？", "提示", { type: "warning" });
+  await api.post(`/cmdb/devices/${row.id}/restore/`, {});
+  ElMessage.success("已恢复");
+  openRecycle();
+};
+const purgeDev = async (row) => {
+  await ElMessageBox.confirm("彻底删除不可恢复，确认删除设备「" + row.name + "」？（关联接口/附件/维保一并删除）",
+                             "危险操作", { type: "error", confirmButtonText: "彻底删除" });
+  await api.post(`/cmdb/devices/${row.id}/purge/?confirm=1`, {});
+  ElMessage.success("已彻底删除");
+  openRecycle();
+};
 </script>

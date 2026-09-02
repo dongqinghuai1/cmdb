@@ -49,13 +49,29 @@ def write_audit(user, action: str, resource_type: str, resource_id,
 SENSITIVE_KEYS = {"password", "secret", "community", "token", "key", "mfa_secret"}
 
 
+def _fix_jsonable(v):
+    """审计快照可序列化：日期/时间/Decimal/UUID/模型实例/嵌套结构统一转 JSON 安全值。"""
+    import datetime
+    import decimal
+    import uuid as _uuid
+    if isinstance(v, (datetime.datetime, datetime.date, datetime.time)):
+        return v.isoformat()
+    if isinstance(v, (decimal.Decimal, _uuid.UUID)):
+        return str(v)
+    if hasattr(v, "pk"):  # 模型实例 -> 主键（审计可序列化）
+        return {"pk": v.pk, "str": str(v)[:80]}
+    if isinstance(v, dict):
+        return {k: _fix_jsonable(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple, set)):
+        return [_fix_jsonable(x) for x in v]
+    return v
+
+
 def _mask(data):
     if not data:
         return data
     out = {}
     for k, v in data.items():
         v = "****" if any(s in k.lower() for s in SENSITIVE_KEYS) else v
-        if hasattr(v, "pk"):  # 模型实例 -> 主键（审计可序列化）
-            v = {"pk": v.pk, "str": str(v)[:80]}
-        out[k] = v
+        out[k] = _fix_jsonable(v)
     return out

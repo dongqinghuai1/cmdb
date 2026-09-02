@@ -1,7 +1,7 @@
 # 交接文档（面向下一个开发智能体）
 
-> 最后更新：2026-09-02（轻量变更单上线，change 域完整交付）。
-> 一期+二期已完成并实测通过；三期「自动化运维」（M2026-09-02）、「轻量事件单」（M2026-09-02b）、「轻量变更单」（M2026-09-02c）已上线，见文末里程碑。
+> 最后更新：2026-09-03（CMDB 基础补齐 R1：数据质量/回收站/附件/维保/变更历史/动态分组/软件一致性）。
+> 一期+二期已完成并实测通过；三期「自动化运维」（M2026-09-02）、「轻量事件单」（M2026-09-02b）、「轻量变更单」（M2026-09-02c）、「CMDB 基础补齐 R1」（M2026-09-03）已上线，见文末里程碑。
 > 读完本文 + DEPLOY.md + DEVELOPMENT.md 即可接手。
 
 ## 1. 当前状态总览
@@ -12,7 +12,7 @@
 |---|---|---|
 | system | ✅ 完成 | RBAC+数据权限、凭据保险箱(AES-GCM)、通知渠道(飞书webhook)、审计、ApiToken |
 | dcim | ✅ 完成 | 地区->机房->机柜树、机柜 U 位可视化(elevation API)、线缆表、**机房平面图 DIY 编辑器** |
-| cmdb | ✅ 完成 | 动态模型(attrs JSONB)、设备台账、Excel 导入导出、360° 视图、拖拽上架/换位/下架 |
+| cmdb | ✅ 完成（R1 补齐） | 动态模型(attrs JSONB)、设备台账、Excel 导入导出、360° 视图、拖拽上架/换位/下架；**R1：数据质量看板、回收站(恢复/彻底删除)、附件上传下载、维保License、变更历史、动态分组evaluate、软件版本一致性** |
 | monitor | ✅ 骨架 | 采集器注册、SNMP 采集引擎(pysnmp, IF-MIB)、VM 统一 label 写入、分片任务 collect_shard |
 | usage | ✅ 完成 | 占用/预约(时间窗排他)、LoginEvent 表 |
 | alert | ✅ 骨架 | 规则引擎(metric/state)、dedup_key 去重、飞书通知、ack/resolve 闭环 |
@@ -71,6 +71,7 @@
 | **verify_automate.py** | **自动化运维：脚本 CRUD / 高危审批闭环 / 灰度批次 / 取消 / 权限护栏** | **33 PASS** |
 | **verify_incident.py** | **事件单：权限护栏 / 报障分派处理反馈关闭 / 时间线 / SLA overdue / 告警联动 / 审计留痕** | **28 PASS** |
 | **verify_change.py** | **变更单：申请/提交校验 / 审批复用 Approval / 实施验证关闭 / 驳回 / 回滚 / 角色护栏 / 审计** | **28 PASS** |
+| **verify_cmdb_r1.py** | **CMDB R1：质量看板 / 回收站 / 附件(本地卷存储) / 维保 / 变更历史 / 动态分组 / 软件一致性 / 只读负例** | **33 PASS（sqlite 与容器 PG 各一遍）** |
 | smoke_test.py | 端口级冒烟（登录->建柜->上架->冲突） | 10 PASS |
 | seed_demo.py | 演示数据：2 地区/2 机房/3 机柜/10 设备 | 幂等 |
 | seed_floorplan.py | 上海机房平面图示例布局 | 幂等 |
@@ -168,3 +169,27 @@
 **验证**：`scripts/verify_change.py` 28 PASS（本地 sqlite+eager：无权限/越权 403、窗口/角色/内容等 400 校验、审批复用落库、驳回留原因、回滚闭环、审计行数；含只读旁观者负例 viewer_x）；容器栈端到端复测：CHG 全流程 draft→…→closed 且 approval 行 approved/意见回显 ✅，`/changes` 页面 200。
 
 **待办/坑**：① 变更窗口不自动联动 alert_silence（PRD 期望割接期间静默，未接）；② related_script_run_id 仅记录不打通"变更获批后自动发起执行"；③ related_config_event_id 需 NCM 变更事件表落地后才有真引用；④ 变更单无站内/飞书通知（notification 体系统一欠账）。
+
+---
+
+## 11. 里程碑 M2026-09-03：CMDB 基础补齐 R1（档案 + 台账工具层）
+
+**范围**：把 PRD 5.5 已有表但缺 API/界面的"基础 CMDB"能力接齐——数据质量看板、回收站、附件、维保 License、变更历史、动态分组规则、软件版本一致性。审批/事件/变更等模块的深验按用户指示延后。
+
+**后端**（apps/cmdb，无新表）：
+- **数据质量**（5.5.6 P1）：`GET /cmdb/devices/data-quality/` 返回 7 类缺失指标汇总（无SN/责任人/保修/品牌/版本/未上架(非虚机)/无管理IP(非虚机)）+ 按 kind 拉缺失清单前 100（含位置/责任人）。
+- **回收站**（5.5.2 P1）：`GET /cmdb/devices/?deleted=1` 列出软删行；`POST .../restore/` 恢复；`POST .../purge/?confirm=1` 彻底删除（仅 execute 权限/超管，审计 restore/purge）。
+- **附件**（5.5.3 附件 Tab）：`/cmdb/attachments/` multipart 上传(≤25MB)、按 device_id 列表、`.../{id}/download/` 流式下载、删除；写操作分别门禁 cmdb.device.edit/execute。**存储为本地卷**：api 容器挂载命名卷 `nops-media:/app/media`（apps/cmdb/storage.py 相对 uuid 文件名，防穿越；MinIO 迁移预留，file_url 语义不变）。
+- **维保 License**：`/cmdb/licenses/` CRUD（type/seats/expire/supplier/contract_no）；`LicenseSerializer.device_id` 用 PrimaryKeyRelatedField(source="device") 解决 FK 字段名入参问题。
+- **变更历史**（5.5.3 Tab）：`GET /cmdb/devices/{id}/history/` 直读 system_auditlog（跨应用 raw SQL，含操作人/来源IP）；**顺带修复两处审计缺口**：Device 自定义 create/update 此前绕过 BaseModelViewSet 审计——现补写；`common.audit._mask` 对 date/datetime/Decimal 等不可 JSON 序列化值导致 PG(psycopg) 审计写入静默失败——新增 `_fix_jsonable` 递归归一（影响所有含日期字段资源的 update 审计，属公共 bug 修复）。
+- **动态分组**：`POST /cmdb/groups/{id}/evaluate/` body `{filter?, apply?}` 按 model(code)/region_id/vendor 规则重算（与 member_ids 同语义），apply 时固化规则并回写 members。
+- **软件版本一致性**（5.5.4 首步）：`GET /cmdb/devices/software-summary/` 型号×版本分布计数（vendor/hw_model/model__code/sw_version + c）。
+
+**前端**：
+- `Devices.vue` 头部新增「质量看板」（指标 chips + 按缺失类型切换清单）与「回收站」（列表 + 恢复/彻底删除，危险操作二次确认）两个对话框。
+- `Device360.vue` 扩为五张卡：概览 + 接口 + **维保/合同**（新增/删除）+ **附件**（上传/下载/删除）+ **变更历史**（动作标签/操作人/来源IP）。
+- 动态分组规则配置界面、软件一致性页、360「技术概览」（OSPF/IPsec/ACL/VLAN/路由快照等）属 R2，未在本次范围。
+
+**验证**：`scripts/verify_cmdb_r1.py` 33 PASS——**本地 sqlite 与容器 PG 各一遍**（只读负例本地 op_low、容器 viewer_pg 新建只读角色账号）：A 质量指标/清单、B 软删-列出-恢复-再删-彻底删除+只读 403、C 维保 CRUD 门禁、D 附件上传/列表/下载一致/删除+只读 403、E 变更历史 update 流水与只读可读、F 动态分组预览-应用-成员一致/删除后 404、G 版本分布含新造带版本设备。容器端另验 `/changes`、`/devices/1` 页面 200 与 8 容器 healthy。
+
+**待办/坑**：① 动态分组 evaluate 仅 3 种规则字段（model/region/vendor），后续扩展 usage_tag/lifecycle/online 等多条件；② 附件仍在 api 本地卷，未接 MinIO（nops-media 已挂载持久）；③ 历史 Tab 只展示时间/动作/人/IP，未做前后值 diff 展示（audit before/after 已可读，R2 可加）；④ 软件一致性仅统计口径，无"目标版本 + 落后清单"差集入口（R2）。

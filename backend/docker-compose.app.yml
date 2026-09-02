@@ -5,6 +5,9 @@ networks:
     external: true
     name: nops-net
 
+volumes:
+  nops-media: {}
+
 x-app-env: &app-env
   env_file: .env
   environment: &app-env-vars
@@ -23,6 +26,8 @@ services:
     container_name: nops-api
     command: gunicorn config.wsgi:application -b 0.0.0.0:8000 -w 4 --timeout 120 --access-logfile - --error-logfile -
     <<: *app-env
+    volumes:
+      - nops-media:/app/media
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
