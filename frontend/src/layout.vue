@@ -19,7 +19,8 @@
           <el-menu-item index="/ipam">IP · VLAN · 地址</el-menu-item>
           <el-menu-item index="/topo">网络拓扑</el-menu-item>
           <el-menu-item index="/ncm">配置备份与 diff</el-menu-item>
-          <el-menu-item disabled class="plan">⌛ 路由/NAT/链路质量/无线总览（规划）</el-menu-item>
+          <el-menu-item index="/network">网络总览（路由/链路/无线）</el-menu-item>
+          <el-menu-item disabled class="plan">⌛ NAT/ACL 策略 · 链路质量时序（规划，扩展位已预留）</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="g-asset">

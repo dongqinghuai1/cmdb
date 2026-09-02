@@ -10,6 +10,7 @@ const routes = [
       { path: "dashboard", component: () => import("./pages/Dashboard.vue"), meta: { title: "工作台" } },
       { path: "dcim", component: () => import("./pages/Dcim.vue"), meta: { title: "机房管理" } },
       { path: "topo", component: () => import("./pages/Topo.vue"), meta: { title: "拓扑管理" } },
+      { path: "network", component: () => import("./pages/Network.vue"), meta: { title: "网络总览" } },
       { path: "ncm", component: () => import("./pages/Ncm.vue"), meta: { title: "配置管理" } },
       { path: "automate", component: () => import("./pages/Automate.vue"), meta: { title: "自动化运维" } },
       { path: "changes", component: () => import("./pages/Changes.vue"), meta: { title: "变更管理" } },

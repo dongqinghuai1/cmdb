@@ -421,6 +421,130 @@ class DeviceViewSet(BaseModelViewSet):
             })
         return Response({"summary": summary, "within_days": days, "rows": rows})
 
+    # ---------- 网络总览（跨设备汇总：路由/邻居/链路/无线/VLAN + 扩展位） ----------
+    @action(detail=False, methods=["get"], url_path="network-overview")
+    def network_overview(self, request):
+        """按 区域/站点 过滤（可选 region_id/site_id），汇总现有采集：
+
+        neighbors=OSPF/BGP 邻居 / routes=最新路由快照 / links=链路状态(下行/高错包,含光功率)
+        ap=无线AP / vlans=VLAN 使用分布 / extensions=待采集能力说明位(NAT/ACL/质量时序/无线深度)。
+        新增采集品类时在此追加分区字段即可，前端按分区渲染——满足"随时拓展、后续迁移"。
+        """
+        from collections import Counter
+        from apps.cmdb.models import (DeviceInterface, DeviceInterfaceStat, RoutingNeighbor,
+                                      RouteTableSnapshot, WirelessApInfo)
+        flt = {"deleted_at__isnull": True}
+        rid = request.query_params.get("region_id")
+        sid = request.query_params.get("site_id")
+        if rid:
+            flt["region_id"] = int(rid)
+        if sid:
+            flt["site_id"] = int(sid)
+        devs = Device.objects.filter(**flt).only("id", "name", "manage_ip", "region", "site")
+        ids = [d.id for d in devs]
+        devmap = {d.id: {"name": d.name,
+                         "manage_ip": str(d.manage_ip or ""),
+                         "region": d.region.name if d.region else "",
+                         "site": d.site.name if d.site else ""} for d in devs}
+
+        # 邻居
+        nrows = list(RoutingNeighbor.objects.filter(device_id__in=ids)
+                     .order_by("protocol", "neighbor_addr")[:400])
+        neigh_rows, state_c = [], Counter()
+        for n in nrows:
+            dm = devmap.get(n.device_id) or {}
+            state_c[n.state] += 1
+            neigh_rows.append({"device_id": n.device_id, **dm, "protocol": n.protocol,
+                               "vrf": n.vrf or "", "neighbor_addr": n.neighbor_addr,
+                               "state": n.state, "last_seen_at": n.last_seen_at})
+
+        # 路由快照（每设备最新一条）
+        rt_rows, prefix_total = [], 0
+        latest = {}
+        for rt in RouteTableSnapshot.objects.filter(device_id__in=ids).order_by("-snapshot_at"):
+            if rt.device_id not in latest:
+                latest[rt.device_id] = rt
+        for did, rt in list(latest.items())[:200]:
+            dm = devmap.get(did) or {}
+            cnt = len(rt.routes or [])
+            prefix_total += cnt
+            rt_rows.append({"device_id": did, **dm, "snapshot_at": rt.snapshot_at,
+                            "count": cnt, "route_hash": rt.route_hash[:12],
+                            "age_days": (timezone.now() - rt.snapshot_at).days})
+
+        # 链路：下行(admin up/oper down) + 高错包；全部统计 checked/down/high_error
+        ifs = list(DeviceInterface.objects.select_related("device", "stat")
+                   .filter(device_id__in=ids, admin_status="up")[:400])
+        link_rows, link_sum = [], {"checked": 0, "down": 0, "high_error": 0}
+        for i in ifs:
+            st = getattr(i, "stat", None)
+            down = i.oper_status == "down"
+            herr = bool(st) and (float(st.in_errors_rate or 0) > 0.5
+                                 or float(st.out_errors_rate or 0) > 0.5)
+            link_sum["checked"] += 1
+            if down:
+                link_sum["down"] += 1
+            if herr:
+                link_sum["high_error"] += 1
+            if down or herr:
+                dm = devmap.get(i.device_id) or {}
+                link_rows.append({
+                    "device_id": i.device_id, **dm, "if_name": i.name,
+                    "if_alias": i.if_alias, "media_type": i.media_type,
+                    "admin_status": i.admin_status, "oper_status": i.oper_status,
+                    "is_uplink": i.is_uplink, "speed_bps": i.speed_bps,
+                    "stat": {"in_bps": st.in_bps, "out_bps": st.out_bps,
+                             "in_errors_rate": str(st.in_errors_rate),
+                             "out_errors_rate": str(st.out_errors_rate),
+                             "optical_tx_dbm": str(st.optical_tx_dbm) if st.optical_tx_dbm else None,
+                             "optical_rx_dbm": str(st.optical_rx_dbm) if st.optical_rx_dbm else None,
+                             "updated_at": st.updated_at} if st else None,
+                })
+        link_rows.sort(key=lambda x: (x["oper_status"] != "down", -float(x["stat"]["in_errors_rate"])
+                                      if x["stat"] and x["stat"]["in_errors_rate"] else 0))
+
+        # 无线 AP
+        ap_qs = WirelessApInfo.objects.select_related("device").filter(device_id__in=ids)
+        ap_rows = [{"device_id": a.device_id,
+                    "name": a.device.name, "ap_name": a.ap_name, "ap_model": a.ap_model,
+                    "ap_ip": str(a.ap_ip or ""), "status": a.status,
+                    "client_count": a.client_count, "channel_2g": a.channel_2g,
+                    "channel_5g": a.channel_5g, "tx_power": a.tx_power,
+                    "site": a.device.site.name if a.device.site else "",
+                    "synced_at": a.synced_at}
+                   for a in ap_qs[:200]]
+
+        # VLAN 使用分布（native + tagged）
+        vlan_cnt = Counter()
+        for i in ifs:
+            if i.native_vlan:
+                vlan_cnt[i.native_vlan] += 1
+            for v in (i.vlan_ids or []):
+                vlan_cnt[v] += 1
+        vlan_rows = [{"vlan": v, "count": c} for v, c in vlan_cnt.most_common(50)]
+
+        return Response({
+            "generated_at": timezone.now().isoformat(),
+            "meta": {"region_id": rid, "site_id": sid, "devices_covered": len(ids),
+                     "extensible": True},
+            "neighbors": {"rows": neigh_rows[:200], "by_state": dict(state_c)},
+            "routes": {"devices_with_snapshot": len(rt_rows), "total_prefixes": prefix_total,
+                       "rows": rt_rows},
+            "links": {"summary": link_sum, "rows": link_rows[:200]},
+            "ap": {"rows": ap_rows},
+            "vlans": {"rows": vlan_rows},
+            "extensions": [
+                {"key": "nat", "label": "公网 S/D NAT 状态", "collected": False,
+                 "note": "待 fortigate/asa 采集驱动写入 TechSnapshot(kind=nat)"},
+                {"key": "acl", "label": "ACL 策略", "collected": False,
+                 "note": "已建模 cmdb_techsnapshot(kind=acl)，待采集驱动"},
+                {"key": "quality_history", "label": "链路质量时序(错包/时延/丢包趋势)", "collected": False,
+                 "note": "依赖 DeviceInterfaceStat 周期采样落历史表"},
+                {"key": "wireless_deep", "label": "无线深度(漫游/RSSI/信道利用率)", "collected": False,
+                 "note": "依赖 WLC 详细采集"},
+            ],
+        })
+
 
 class DeviceGroupViewSet(BaseModelViewSet):
     queryset = DeviceGroup.objects.all()

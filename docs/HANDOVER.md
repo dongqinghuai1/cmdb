@@ -272,3 +272,15 @@
 - **前端**：新页 `frontend/src/pages/Audit.vue`（路由 `/audit`，菜单 安全与合规→操作审计）：动作筛选 + 关键字 + 日期区间；行内"变更摘要"（create/delete/execute/字段数+字段名）；点击行弹详情：对象/人/IP/时间 + **变更前后 diff 表**（before 红 / after 绿，字段级，嵌套 JSON 展示）。审计数据只读。
 - **验证**：sqlite 263 条 / PG 541 条审计均真实可查：list/action+resource_type 过滤/search=Device/日期区间/未来空区间全 200；`/audit` 页面 200。
 - **待办**：登录审计视图（usage LoginEvent 已建表未做 UI）、按用户/操作人下拉过滤、审计导出 CSV（阶段 2）。
+
+---
+
+## 17. 里程碑 M2026-09-04b：网络总览页（跨设备汇总，路由/邻居/链路/无线/VLAN + 扩展位）
+
+- **范围**：IA 路线第 2 步——把分散在 360 的采集数据提为**跨设备汇总视图**；无新表，复用 cmdb_routingneighbor / RouteTableSnapshot / DeviceInterface(+Stat) / WirelessApInfo；预留 NAT/ACL/质量时序等扩展位，满足"后续随时拓展与迁移"。
+- **后端**：`GET /cmdb/devices/network-overview/`（可选 region_id/site_id 过滤），返回分区：
+  `meta{devices_covered, extensible}` / `neighbors{rows,by_state}`（up/full/down 统计）/ `routes`（每设备最新快照 + 前缀总数 + 新鲜度）/ `links{summary{checked,down,high_error}, rows}`（下行或高错包接口，带错包率与光功率）/ `ap` / `vlans`（native+tagged 使用分布 top50）/ `extensions`（nat/acl/quality_history/wireless_deep 说明位：接入即展示，无需改前端分区）。
+  行内 device 名/IP/区域/站点由 Device 一次性映射（避免 N+1）。
+- **前端**：`frontend/src/pages/Network.vue`（路由 `/network`，菜单 网络→网络总览）：顶部 4 统计卡 + 邻居表（状态标签、click 进 360）+ 路由快照表（新鲜度/过期警告）+ 链路状态表（下行/高错包、错包率、光功率收/发）+ AP 表 + 扩展采集位说明；全空态文案指引采集入口。
+- **验证**：`scripts/verify_cmdb_net.py` 11 PASS ×2（sqlite op_low / 容器 PG viewer_pg）：分区齐全、行字段结构、链路 summary 口径、扩展位 4 项、区域过滤（不存在区域→覆盖 0 仍 200）、只读可读；`/network` 页面 200。
+- **设计点（可迁移性）**：新增采集品类只往 `extensions`/新分区追加字段，前端按 key 渲染；`region_id/site_id` 为统一租户级过滤入口，后续跨区域报表可复用。
