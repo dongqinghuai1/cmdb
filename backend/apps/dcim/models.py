@@ -141,3 +141,35 @@ class DcimTicket(TimeStampedModel):
 
     class Meta:
         ordering = ["-id"]
+
+
+class PowerSample(TimeStampedModel):
+    """PDU/UPS 电源实测样本（设备=cmdb 中 model.code in (pdu,ups) 的 facility 设备）。
+
+    采集完全复用既有架构：Prometheus 只读消费（apps/cmdb.prometheus.query_once）为主、
+    SNMP 直采（apps/cmdb.snmp.collect_pdu，厂商模板待校准前走 mock 演练）；
+    额定功率取 Device.rated_power_w（新建样本时快照，历史不回算）。
+    设备删除（cmdb purge）时按 device_id 清理。
+    """
+
+    class Source(models.TextChoices):
+        PROM = "prom", "Prometheus"
+        SNMP = "snmp", "SNMP"
+        MANUAL = "manual", "手工录入"
+
+    device_id = models.BigIntegerField(db_index=True)  # cmdb.Device 裸外键
+    outlet = models.CharField(max_length=32, blank=True, default="", help_text="输出口（'' 为总路）")
+    watts = models.FloatField(null=True, blank=True)
+    current_a = models.FloatField(null=True, blank=True)
+    voltage_v = models.FloatField(null=True, blank=True)
+    utilization_pct = models.FloatField(null=True, blank=True)  # watts / rated 快照
+    rated_watts = models.FloatField(null=True, blank=True)      # 采样时刻额定快照
+    source = models.CharField(max_length=8, choices=Source.choices, default=Source.PROM)
+    sampled_at = models.DateTimeField(db_index=True)
+
+    class Meta:
+        ordering = ["-sampled_at"]
+        verbose_name = "电源实测样本"
+
+    def __str__(self):
+        return f"power dev#{self.device_id} {self.outlet or 'total'} {self.watts}W"

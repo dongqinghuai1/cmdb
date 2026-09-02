@@ -1,6 +1,6 @@
 # 交接文档（面向下一个开发智能体）
 
-> 最后更新：M2026-09-22（报表中心，见文末 §37）。
+> 最后更新：M2026-09-22b（PDU 电源实测，见文末 §38）。
 > 一期+二期已完成并实测通过；三期「自动化运维」（M2026-09-02）、「轻量事件单」（M2026-09-02b）、「轻量变更单」（M2026-09-02c）、「CMDB 基础补齐 R1/R2/R3」（M2026-09-03/03b/03c）、「资产生命周期」（M2026-09-03d）已上线，见文末里程碑。
 > 读完本文 + DEPLOY.md + DEVELOPMENT.md 即可接手。
 
@@ -38,7 +38,7 @@
 ## 3. 待办清单（按 PRD 路线图）
 
 **二期**：syslog 接收+日志检索、NCM 配置备份/diff、拓扑(~~LLDP 自动发现~~ ✅M2026-09-17；G6 手工布局保存待办)、AP 台账同步、~~告警收敛/静默~~ ✅（占用静默+复燃合并 M2026-09-18 / 根因抑制+变更窗口自动静默 M2026-09-21）、IPAM、飞书 SSO、Prometheus remote_write、路由快照采集（~~change_ticket 轻量变更单~~ ✅ 已于三期补齐，见 M2026-09-02c）
-**三期**：~~自动化运维~~ ✅、~~轻量事件单~~ ✅、~~轻量变更单(二期欠账)~~ ✅、~~线缆与 LLDP 比对~~ ✅（M2026-09-17）、~~固件升级/值班~~ ✅（值班 M2026-09-18b / 固件升级编排 M2026-09-20）、~~安全基线~~ ✅（M2026-09-19）、~~报表中心~~ ✅（M2026-09-22）；剩余：资产生命周期+保修/借用、PDU 电源、虚机 vCenter 同步
+**三期**：~~自动化运维~~ ✅、~~轻量事件单~~ ✅、~~轻量变更单(二期欠账)~~ ✅、~~线缆与 LLDP 比对~~ ✅（M2026-09-17）、~~固件升级/值班~~ ✅（值班 M2026-09-18b / 固件升级编排 M2026-09-20）、~~安全基线~~ ✅（M2026-09-19）、~~报表中心~~ ✅（M2026-09-22）、~~PDU 电源~~ ✅（M2026-09-22b）；剩余：资产生命周期+保修/借用、虚机 vCenter 同步
 **四期**：AI（LLM 网关已留 settings.LLM_*、NL2Query、根因分析、ChatOps 飞书机器人、RAG）
 **技术债**：ai/report 骨架 app 补全；巡检只实现了 2 种检查类型（online 状态/接口错包阈值）；collect_shard 需要真实 SNMP 设备联调；audit_log/log_record/login_event 分区表转换（ER D12）；事件单超时仅时间线提醒（飞书/升级未接）
 
@@ -82,6 +82,7 @@
 | **verify_firmware.py** | **固件升级编排：固件库 CRUD+重名400 / 计划快照+设备名 / 进行中同设备防重 / confirm 门禁 / mock 演练(异步轮询至终态) / 真实预检无凭据->failed / 状态机 cancel 边界 / 总览计数 / purge 清计划 / 权限正负例** | **20 PASS（sqlite 与容器 PG 各一遍）** |
 | **verify_suppress.py** | **告警收敛收官：根因抑制（拓扑邻接×级别，C 下游事件被 R 上 critical 根标记 suppressed / 根因自身不吞 / 根因恢复后自动清除）＋ 变更窗口自动静默（实施开始建 maintenance → 收尾提前结束）＋ 权限负例** | **19 PASS（sqlite 与容器 PG 各一遍）** |
 | **verify_report.py** | **报表中心：四类型快照手动生成幂等(同日同类型仅一份) / latest 看板 / 订阅 CRUD+立即 run+overview / 非法类型400 / 权限正负例** | **21 PASS（sqlite 与容器 PG 各一遍）** |
+| **verify_power.py** | **PDU 电源：snmp.collect_pdu mock 走查纯函数(2 输出口) + 真实模板 raise / 建 PDU 设备(额定 3000/2400W) / mock 轮询写实测 / 汇总(利用率=实测÷额定 82.7%/103.3%、总功率、≥80% 超阈值) / 改额定后重采样回落 / 读门与轮询写门 / purge 联动清样本** | **15 PASS（sqlite 与容器 PG 各一遍）** |
 | smoke_test.py | 端口级冒烟（登录->建柜->上架->冲突） | 10 PASS |
 | seed_demo.py | 演示数据：2 地区/2 机房/3 机柜/10 设备 | 幂等 |
 | seed_floorplan.py | 上海机房平面图示例布局 | 幂等 |
@@ -520,6 +521,20 @@
 - **回归脚本稳健化**（跨脚本共享演示用户 `op_low` 的口令/角色冲突）：`verify_change` 对 op_low 做多口令回退 + 起点对齐"仅 change.ticket.view 的最小角色"（只读语义、验证人身份分支可用）；`verify_automate` 起点把 op_low 角色清空（护栏负例语义）。两脚本顺序无关各自绿。
 - **验证**：`scripts/verify_suppress.py` **19 PASS ×2**（sqlite/PG）：mock LLDP 造 R(根)/C(下游) 邻接 → 全局离线 major 规则 + R 专属致命日志 critical 规则 → C 离线事件被 R 上 critical 根抑制（suppressed True + 根指向 R）→ 根因自身不吞 → R critical 全部恢复后同步清除 → 变更单 submit/approve/start 自动建窗口静默（scope 含 C、reason 含单号、ended 未来）→ rollback 提前收口。回归：verify_alert_converge 18、verify_silence_ap 7、verify_automate 33、verify_change 28（后两者双向自愈）。
 - **待办/坑**：① 抑制方向目前靠级别差近似（父宕机表现为更高级别事件），接入/汇聚角色与在线态差补可让方向更精确；② suppressed 事件的前端灰显与"只看根因"视图、收敛报表待做；③ 变更窗口静默与实施人值班冲突/申请延时（plan_start 在未来）尚未做预约校验；④ `monitor.test-write` 为调试口，生产 syslog 链路走 nops-syslog 容器直写（同字段）。
+
+---
+
+## 38. 里程碑 M2026-09-22b：PDU 电源实测（dcim 电源域 + SNMP/Prometheus 双适配）
+
+- **范围**：PDU/UPS 在台账上本就是 cmdb 设备（init_nops_data 预置 model.code=pdu/ups，facility），且 Device 已带 `rated_power_w` 额定功率。本轮补"实测样本 + 采集适配 + 总览"，不新增任何并行采集器：样本写入只发生在轮询动作/周期任务内，通道复用既有 SNMP（apps/cmdb/snmp.py）与 Prometheus（apps/cmdb/prometheus.py）只读消费。
+- **模型**（dcim.0004，仅新增 PowerSample）：`device_id`(裸 FK)+`outlet`(输出口，'' 总路)+watts/current_a/voltage_v+`utilization_pct`+`rated_watts`(采样时刻额定快照)+source(prom/snmp/manual)+sampled_at；同刻多输出口取末行(-id tie-break)。
+- **采集适配**（apps/cmdb/snmp.py `collect_pdu` + apps/dcim/power.py）：
+  - Prometheus 主通道：`poll_prom()` 复用 prometheus.query_once，环境 `NOPS_PROM_POWER_QUERIES` 模板驱动（未配置 skipped，与 prom_poll 降级语义一致）；
+  - SNMP 通道：`poll_snmp(mock=)` — mock 演练（2 输出口样例落库）；真实模式 PDU-MIB 供应商模板未校准主动 raise（沿用无线 RequiresCalibration 纪律，不写假数据）；
+  - 周期任务 `dcim.poll_power`（beat 5 分钟）跑 Prom 通道；样本 30 天滚动清理。
+- **端点** `/dcim/power-samples/`：历史只读（集合 POST 405，样本只能由采集链路写入）；`POST poll`{mock/source/device_ids}（dcim.power.edit 门禁）；`GET summary`（每台最近实测+总功率+≥80% 超阈值计数）。权限点 dcim.power.view/edit 入 init_nops_data（net_ops 正则已含 dcim；net_admin=view、dcim_admin=view+edit、sys_admin 无、auditor 无）。cmdb purge 联动清除电源样本。
+- **验证**：`scripts/verify_power.py` **15 PASS ×2**（sqlite/PG）：纯函数 P1-P2 → 建 2 台 PDU(额定) → 权限读门 S2-S4 → mock 轮询写样本 S5-S6 → 每台 2 条历史 S7-S8 → 汇总(利用率 82.7%/103.3%、总功率 4960W、超阈值 2) S9-S11 → 改额定 3000→3500 后重采样利用率回落 70.9% S12 → purge 联动清理 S13。回归 api_test 33、verify_baseline 15（PG）保持绿。
+- **待办/坑**：① PDU-MIB 供应商模板（Raritan/APC…）校准后即可开真实 SNMP 直采（seam 已留，mock=False 即走真网）；② Prometheus 模板变量文档化（outlet_label/device_field 语义在 NOPS_PROM_POWER_QUERIES）与真实机房样例待补；③ 前端"机柜供电"卡片（利用率为 0-80-100 色阶、超阈值告警联动 alert.rule）待做，后端已就绪。
 
 ---
 

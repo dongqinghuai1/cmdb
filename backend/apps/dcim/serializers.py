@@ -1,7 +1,17 @@
 from rest_framework import serializers
 
-from apps.dcim.models import (Cable, DcimTicket, Rack, RackReservation,
-                              Region, Site, SiteObject)
+from apps.dcim.models import (Cable, DcimTicket, PowerSample, Rack,
+                              RackReservation, Region, Site, SiteObject)
+
+
+class PowerSampleSerializer(serializers.ModelSerializer):
+    source_label = serializers.CharField(source="get_source_display", read_only=True)
+
+    class Meta:
+        model = PowerSample
+        fields = ["id", "device_id", "outlet", "watts", "current_a", "voltage_v",
+                  "utilization_pct", "rated_watts", "source", "source_label",
+                  "sampled_at", "created_at"]
 
 
 class RegionSerializer(serializers.ModelSerializer):

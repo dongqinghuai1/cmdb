@@ -392,3 +392,20 @@ def collect_lldp(host, community, port=161, timeout=1.5):
     loc_rows = snmpwalk(host, community, LLDP_LOC_ENTRY, port=port, timeout=timeout)
     rem_rows = snmpwalk(host, community, LLDP_REM_ENTRY, port=port, timeout=timeout)
     return {"local": parse_lldp_loc(loc_rows), "remote": parse_lldp_rem(rem_rows)}
+
+
+# ---------- PDU 电源走查（rPDU 电量，只读探针） ----------
+# 真实 PDU-MIB 供应商模板（Raritan/APC 等对象标识差异大）尚未校准，v1 策略：
+# mock=True 走内置样例（回归/演练）；mock=False 在模板表落定前抛 RequiresCalibration，
+# 由调用方（dcim 采集任务）记录"待校准"并跳过，生产走 Prometheus 适配（推荐主通道）。
+
+def collect_pdu(host, community, port=161, timeout=1.5, mock=False):
+    """PDU/UPS 电量走查 → {outlets: [{outlet, watts, current_a, voltage_v}]}。"""
+    if mock:
+        return {"outlets": [
+            {"outlet": "PDU-A1", "watts": 3150, "current_a": 14.3, "voltage_v": 220.0},
+            {"outlet": "PDU-B1", "watts": 2480, "current_a": 11.4, "voltage_v": 220.0},
+        ]}
+    raise RequiresCalibration(
+        "PDU-MIB 供应商模板待校准：请先以 Prometheus（NOPS_PROM_POWER_QUERIES）接入实测，"
+        "或 mock=1 演练（dcim 采集任务将本类设备计为待校准跳过）")

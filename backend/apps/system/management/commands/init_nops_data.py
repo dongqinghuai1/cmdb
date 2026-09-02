@@ -26,6 +26,8 @@ class Command(BaseCommand):
             ("dcim.region.view", "机房查看", "机房管理", "view"),
             ("dcim.rack.view", "机柜查看", "机房管理", "view"),
             ("dcim.rack.edit", "机柜编辑", "机房管理", "edit"),
+            ("dcim.power.view", "机房电源查看", "机房电源", "view"),
+            ("dcim.power.edit", "电源采集/录入", "机房电源", "edit"),
             ("cmdb.model.view", "模型查看", "设备管理", "view"),
             ("cmdb.model.edit", "模型编辑", "设备管理", "edit"),
             ("cmdb.device.view", "设备查看", "设备管理", "view"),
@@ -86,7 +88,7 @@ class Command(BaseCommand):
             return role
 
         _persona("net_admin", "网络管理员", [
-            "cmdb.device.view", "dcim.region.view", "dcim.rack.view",
+            "cmdb.device.view", "dcim.region.view", "dcim.rack.view", "dcim.power.view",
             "alert.event.view", "change.ticket.view", "report.snapshot.view",
         ], ["menu.home", "menu.monitor", "menu.net", "menu.asset", "menu.dcim", "menu.workflow"])
         _persona("sys_admin", "系统运维", [
@@ -99,6 +101,7 @@ class Command(BaseCommand):
         _persona("dcim_admin", "机房运维", [
             "cmdb.device.view", "cmdb.device.edit", "cmdb.device.execute",
             "dcim.region.view", "dcim.rack.view", "dcim.rack.edit",
+            "dcim.power.view", "dcim.power.edit",
         ], ["menu.home", "menu.asset", "menu.dcim"])
         auditor_role = _persona("auditor", "审计员", ["system.audit.view"],
                                 ["menu.home", "menu.security"])

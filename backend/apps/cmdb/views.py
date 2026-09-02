@@ -251,6 +251,9 @@ class DeviceViewSet(BaseModelViewSet):
         # automate 域裸外键残留：固件升级计划
         from apps.automate.models import FirmwareUpgradePlan
         FirmwareUpgradePlan.objects.filter(device_id=pk).delete()
+        # dcim 域裸外键残留：电源实测样本
+        from apps.dcim.models import PowerSample
+        PowerSample.objects.filter(device_id=pk).delete()
         Device.all_objects.filter(pk=pk).delete()  # 全量 SQL 删除（含附件/授权等级联）
         from common.audit import write_audit
         write_audit(request.user, "purge", "Device", pk, after={"name": name},

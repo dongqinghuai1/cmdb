@@ -2,11 +2,11 @@ from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from apps.dcim.models import (Cable, DcimTicket, Rack, RackReservation,
-                              Region, Site, SiteObject)
+from apps.dcim.models import (Cable, DcimTicket, PowerSample, Rack,
+                              RackReservation, Region, Site, SiteObject)
 from apps.dcim.serializers import (CableSerializer, DcimTicketSerializer,
-                                   RackReservationSerializer, RackSerializer,
-                                   RegionSerializer, SiteSerializer)
+                                   PowerSampleSerializer, RackReservationSerializer,
+                                   RackSerializer, RegionSerializer, SiteSerializer)
 from apps.dcim.services import RackService
 from apps.system.views import BaseModelViewSet
 from common.permissions import has_perm
@@ -236,3 +236,43 @@ class DcimTicketViewSet(BaseModelViewSet):
         t.result = (request.data.get("reason") or "").strip() or t.result
         t.save(update_fields=["status", "result", "updated_at"])
         return Response({"id": t.pk, "status": t.status})
+
+
+# ============ PDU/UPS 电源（实测样本 + 采集动作 + 汇总） ============
+
+class PowerSampleViewSet(BaseModelViewSet):
+    """电源实测样本历史（只读；集合 POST 显式拒绝）；poll 为写动作（dcim.power.edit 门禁）。"""
+    queryset = PowerSample.objects.order_by("-sampled_at")
+    serializer_class = PowerSampleSerializer
+    required_perm = "dcim.power.view"
+    filterset_fields = ["device_id", "source", "outlet"]
+
+    def create(self, request, *args, **kwargs):
+        from rest_framework.response import Response
+        return Response({"detail": "样本只读：请走 poll 动作或采集链路写入"}, status=405)
+
+    def _need_edit(self):
+        if not (self.request.user.is_superuser or has_perm(self.request.user, "dcim.power.edit")):
+            raise PermissionDenied("无电源采集/录入权限（dcim.power.edit）")
+
+    @action(detail=False, methods=["post"])
+    def poll(self, request):
+        """触发一轮电源采集。body: {mock?:0|1, source?: 'snmp'|'prom', device_ids?:[..]}
+        mock=1 走 SNMP 演练样例（不触网）；mock=0 + source=snmp 真实模板待校准（计待校准）；
+        source=prom 读 Prometheus 环境（未配置则 skipped）。"""
+        self._need_edit()
+        from apps.dcim import power as power_svc
+        mock = bool(request.data.get("mock") or 0)
+        source = request.data.get("source") or ("snmp" if mock else "prom")
+        device_ids = request.data.get("device_ids") or None
+        if source == "prom":
+            res = power_svc.poll_prom()
+        else:
+            res = power_svc.poll_snmp(device_ids, mock=mock)
+        return Response({"source": source, "mock": mock, **res})
+
+    @action(detail=False, methods=["get"])
+    def summary(self, request):
+        """电源总览：每台供电设备最近实测 + 总功率 + 超阈值(≥80%)计数。"""
+        from apps.dcim import power as power_svc
+        return Response(power_svc.latest_summary())
