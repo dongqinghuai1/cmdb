@@ -9,6 +9,7 @@
         <el-menu-item index="/topo"><el-icon><Connection /></el-icon>拓扑管理</el-menu-item>
         <el-menu-item index="/ncm"><el-icon><Document /></el-icon>配置管理</el-menu-item>
         <el-menu-item index="/automate"><el-icon><Promotion /></el-icon>自动化运维</el-menu-item>
+        <el-menu-item index="/changes"><el-icon><EditPen /></el-icon>变更管理</el-menu-item>
         <el-menu-item index="/logs"><el-icon><Tickets /></el-icon>日志中心</el-menu-item>
         <el-menu-item index="/ipam"><el-icon><Grid /></el-icon>IP 管理</el-menu-item>
         <el-menu-item index="/devices"><el-icon><Cpu /></el-icon>设备台账</el-menu-item>
@@ -30,7 +31,7 @@
 
 <script setup>
 import { onMounted, ref } from "vue";
-import { Bell, Connection, Cpu, Document, Grid, List, Monitor, OfficeBuilding, Promotion, Service, Setting, Tickets } from "@element-plus/icons-vue";
+import { Bell, Connection, Cpu, Document, EditPen, Grid, List, Monitor, OfficeBuilding, Promotion, Service, Setting, Tickets } from "@element-plus/icons-vue";
 import api from "./api";
 
 const user = ref({});

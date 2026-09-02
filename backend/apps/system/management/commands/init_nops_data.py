@@ -45,6 +45,10 @@ class Command(BaseCommand):
             ("automate.approve", "审批处理", "自动化运维", "execute"),
             ("change.incident.view", "事件单查看", "事件处理", "view"),
             ("change.incident.edit", "事件单报障/处理", "事件处理", "edit"),
+            ("change.ticket.view", "变更单查看", "变更管理", "view"),
+            ("change.ticket.edit", "变更申请/提交", "变更管理", "edit"),
+            ("change.ticket.execute", "变更实施/验证/关闭", "变更管理", "execute"),
+            ("change.ticket.approve", "变更审批", "变更管理", "approve"),
         ]
         for code, name, menu, action in perms:
             Permission.objects.get_or_create(code=code, defaults={"name": name, "menu": menu, "action": action})

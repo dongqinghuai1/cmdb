@@ -1,7 +1,7 @@
 # 交接文档（面向下一个开发智能体）
 
-> 最后更新：2026-09-02（事件单模块上线，三期第二个交付）。
-> 一期+二期已完成并实测通过；三期「自动化运维」（M2026-09-02）与「轻量事件单」（M2026-09-02b）已上线，见文末里程碑。
+> 最后更新：2026-09-02（轻量变更单上线，change 域完整交付）。
+> 一期+二期已完成并实测通过；三期「自动化运维」（M2026-09-02）、「轻量事件单」（M2026-09-02b）、「轻量变更单」（M2026-09-02c）已上线，见文末里程碑。
 > 读完本文 + DEPLOY.md + DEVELOPMENT.md 即可接手。
 
 ## 1. 当前状态总览
@@ -18,7 +18,7 @@
 | alert | ✅ 骨架 | 规则引擎(metric/state)、dedup_key 去重、飞书通知、ack/resolve 闭环 |
 | inspect | ✅ 骨架 | 模板/检查项、执行任务、异常转告警(共用事件表) |
 | automate | ✅ 三期首模块 | 脚本库 / 高危审批 / 批量执行(灰度批次) / 逐台明细（ER 4.12；Ansible/任务编排/固件升级 P2 待落地） |
-| change | ✅ 三期第二模块 | **轻量事件单**：报障->分派->处理->反馈->关闭 + SLA 超时 + 告警联动建单（ER 4.13 incident；change_ticket 变更单为二期欠账，下个交付） |
+| change | ✅ 三期第2/3交付 | **事件单**（报障->分派->处理->反馈->关闭 + SLA + 告警联动）+ **轻量变更单**（12.2-5：申请->审批->实施->验证->关闭/驳回/回滚，审批复用 automate.Approval；角色分离 applicant/implementer/verifier/approver）（ER 4.13） |
 | 其余 | ⬜ 骨架 | ai / report：空壳 models + 空路由，模型定义见 ER 4.15/4.16 |
 
 **前端**：登录/工作台/机房管理(树+平面图+U位)/设备台账+360/告警/巡检/系统管理，全部可用。
@@ -37,8 +37,8 @@
 
 ## 3. 待办清单（按 PRD 路线图）
 
-**二期**：syslog 接收+日志检索、NCM 配置备份/diff、拓扑(LLDP 自动发现+G6 画布)、AP 台账同步、告警收敛/静默、IPAM、飞书 SSO、Prometheus remote_write、路由快照采集；**欠账：change_ticket 轻量变更单（12.2-5，可复用 automate.Approval biz_type=change_ticket）**
-**三期**：~~自动化运维~~ ✅、~~轻量事件单~~ ✅；剩余：安全基线、资产生命周期+保修/借用、报表中心、线缆与 LLDP 比对、固件升级/值班、PDU 电源、虚机 vCenter 同步
+**二期**：syslog 接收+日志检索、NCM 配置备份/diff、拓扑(LLDP 自动发现+G6 画布)、AP 台账同步、告警收敛/静默、IPAM、飞书 SSO、Prometheus remote_write、路由快照采集（~~change_ticket 轻量变更单~~ ✅ 已于三期补齐，见 M2026-09-02c）
+**三期**：~~自动化运维~~ ✅、~~轻量事件单~~ ✅、~~轻量变更单(二期欠账)~~ ✅；剩余：安全基线、资产生命周期+保修/借用、报表中心、线缆与 LLDP 比对、固件升级/值班、PDU 电源、虚机 vCenter 同步
 **四期**：AI（LLM 网关已留 settings.LLM_*、NL2Query、根因分析、ChatOps 飞书机器人、RAG）
 **技术债**：ai/report 骨架 app 补全；巡检只实现了 2 种检查类型（online 状态/接口错包阈值）；collect_shard 需要真实 SNMP 设备联调；audit_log/log_record/login_event 分区表转换（ER D12）；事件单超时仅时间线提醒（飞书/升级未接）
 
@@ -70,6 +70,7 @@
 | verify_silence_ap.py | 告警静默 + AP 台账同步 | 7 PASS |
 | **verify_automate.py** | **自动化运维：脚本 CRUD / 高危审批闭环 / 灰度批次 / 取消 / 权限护栏** | **33 PASS** |
 | **verify_incident.py** | **事件单：权限护栏 / 报障分派处理反馈关闭 / 时间线 / SLA overdue / 告警联动 / 审计留痕** | **28 PASS** |
+| **verify_change.py** | **变更单：申请/提交校验 / 审批复用 Approval / 实施验证关闭 / 驳回 / 回滚 / 角色护栏 / 审计** | **28 PASS** |
 | smoke_test.py | 端口级冒烟（登录->建柜->上架->冲突） | 10 PASS |
 | seed_demo.py | 演示数据：2 地区/2 机房/3 机柜/10 设备 | 幂等 |
 | seed_floorplan.py | 上海机房平面图示例布局 | 幂等 |
@@ -99,6 +100,7 @@
 | 加周期任务 | 对应 app tasks.py 用 shared_task + config/celery.py register_beat |
 | 加脚本库/执行规则 | apps/automate/{models,services,tasks,views}.py（ER 4.12） |
 | 事件单状态机/动作 | apps/change/{models,services,views}.py（ER 4.13 incident；_can 参与人校验 + 状态机集合） |
+| 变更单状态机/动作 | 同 apps/change（services 变更单段：submit/decide/start/verify/close/rollback + 角色分离） |
 | 告警->事件单联动 | apps/alert/views.py AlertEventViewSet.create_incident -> change.services.create_from_alert |
 | SLA 周期任务 | apps/change/tasks.py check_sla；celery 路由 `change.*→nops` |
 
@@ -146,3 +148,23 @@
 **验证**：`scripts/verify_incident.py` 28 PASS（本地 sqlite+eager：权限 403/越权、非法分派/空 resolution 400、全生命周期、时间线、overdue、告警联动、审计行数）；容器栈端到端复测：人工全流程 closed 4 事件 + 联动单 source=alert 关联设备与告警标题 + `celery -A config call change.check_sla` 触发后逾期单出现 sla_warning 时间线 ✅。
 
 **待办/坑**：① change_ticket 轻量变更单（ER 4.13 另一半）未建，可复用 automate.Approval biz_type=change_ticket；② SLA 超时仅时间线提醒，飞书/值班升级未接；③ 事件单超时/分派无站内消息（notification 体系未接）；④ 巡检异常自动建单（source=inspect）入口未在巡检页做按钮（后端已支持 source 字段，可在 Inspects.vue 补）。
+
+---
+
+## 10. 里程碑 M2026-09-02c：轻量变更单上线（change 域完整交付）
+
+**范围（PRD 12.2-5 / ER 4.13 change_ticket）**：申请->审批->实施->验证->关闭，支持驳回/回滚；**审批复用 automate.Approval（biz_type=change_ticket，同表打通脚本执行审批与变更审批）**；申请/实施/验证/审批四角色分离；不做重型 ITSM。
+
+**后端**（apps/change，迁移 0002 一张表 `ChangeTicket`）：
+- 字段对齐 ER：ticket_no（CHG-YYYYMMDD-NNN）、change_type(config/device/sw_upgrade/network)、risk_level(high/mid/low)、plan_start/end 变更窗口、actual_start/end、status、applicant/implementer/verifier/approver_id、approval_id、content jsonb(summary/impact/steps/affected_device_ids)、related_script_run_id/related_config_event_id、rollback_plan、result_desc
+- 状态机：`draft→approving→approved→implementing→verifying→closed`；approving 驳→`rejected`；implementing/verifying 可→`rolledback`（回滚需实填方案）；每步审计（system_auditlog resource_type=ChangeTicket）
+- 审批复用：submit 生成 automate.Approval 行（biz change_ticket + biz_id）；approve/reject 同步审批行状态/意见/decided_at；拒绝必须填原因
+- 角色护栏：approve/reject 需审批人身份或 `change.ticket.approve`；start 需实施人/execute 权限；verify 需验证人身份或 execute 权限（**验证人≠实施人** 校验）；close/rollback 需实施/验证/申请人或 execute 权限
+- 权限点（init_nops_data 幂等）：`change.ticket.view/edit/execute/approve`；net_ops 已授 change.*
+- **API**：`/api/v1/changes/change-tickets/`（list/retrieve 名称+审批行+执行单快照富化；create 草稿；动作 submit/approve/reject/start/verify/close/rollback；filter status/risk/mine=applicant|implement|verify/search）
+
+**前端** `frontend/src/pages/Changes.vue`：发起变更（草稿：标题/类型/风险/摘要/影响面/步骤）-> 列表（类型/风险/窗口/状态过滤、我的申请/实施/验证）-> 详情抽屉（审批状态与意见/变更内容/回滚预案/验证结果 + 按状态与当前用户身份出现 提交审批/通过/驳回/开始实施/提交验证/回滚/关闭）。路由 `/changes` + 侧栏"变更管理"（EditPen 图标，位于自动化运维后）。
+
+**验证**：`scripts/verify_change.py` 28 PASS（本地 sqlite+eager：无权限/越权 403、窗口/角色/内容等 400 校验、审批复用落库、驳回留原因、回滚闭环、审计行数；含只读旁观者负例 viewer_x）；容器栈端到端复测：CHG 全流程 draft→…→closed 且 approval 行 approved/意见回显 ✅，`/changes` 页面 200。
+
+**待办/坑**：① 变更窗口不自动联动 alert_silence（PRD 期望割接期间静默，未接）；② related_script_run_id 仅记录不打通"变更获批后自动发起执行"；③ related_config_event_id 需 NCM 变更事件表落地后才有真引用；④ 变更单无站内/飞书通知（notification 体系统一欠账）。

@@ -260,3 +260,235 @@ def check_sla_now() -> dict:
                    f"SLA 超时提醒：应于 {t.sla_deadline:%m-%d %H:%M} 前处理完毕")
         n += 1
     return {"overdue": overdue.count(), "new_warnings": n}
+
+
+# ================= 轻量变更单（ER 4.13 / 12.2-5） =================
+# 状态机：draft -> approving -> approved -> implementing -> verifying -> closed
+#                         驳-> rejected；implementing/verifying 可 -> rolledback
+# 审批复用 automate.Approval（biz_type=change_ticket）；申请/实施/验证角色分离。
+
+_SUBMIT_REQUIRED = {"title", "change_type", "risk_level", "plan_start", "plan_end"}
+
+
+def _gen_change_no() -> str:
+    from apps.change.models import ChangeTicket
+    today = timezone.localdate().strftime("%Y%m%d")
+    prefix = f"CHG-{today}-"
+    last = (ChangeTicket.objects.filter(ticket_no__startswith=prefix)
+            .order_by("-ticket_no").values_list("ticket_no", flat=True).first())
+    seq = int(last.rsplit("-", 1)[1]) + 1 if last else 1
+    return f"{prefix}{seq:03d}"
+
+
+def _audit_change(user, action, t: object, after=None, source_ip: str = ""):
+    from common.audit import write_audit
+    write_audit(user, action, "ChangeTicket", t.pk,
+                after={**(after or {}), "ticket_no": t.ticket_no}, source_ip=source_ip)
+
+
+def _can_change(user, t: object, action: str) -> bool:
+    """变更单角色分离：申请人/实施人/验证人身份 + 权限码（change.ticket.*），管理员兜底。"""
+    from common.permissions import has_perm
+    if user.is_superuser:
+        return True
+    if action in ("submit", "edit") and has_perm(user, "change.ticket.edit"):
+        return True
+    if action in ("approve", "reject"):
+        return (user.id == t.approver_id) or has_perm(user, "change.ticket.approve")
+    if action == "start":
+        return (user.id == t.implementer_id) or has_perm(user, "change.ticket.execute")
+    if action == "verify":
+        return (user.id == t.verifier_id) or has_perm(user, "change.ticket.execute")
+    if action in ("close", "rollback"):
+        return (user.id in (t.applicant_id, t.verifier_id, t.implementer_id)
+                or has_perm(user, "change.ticket.execute"))
+    return False
+
+
+def _ensure_users_exist(mapping: dict) -> None:
+    missing = [k for k, v in mapping.items() if v and int(v) not in fetch_users([int(v)])]
+    if missing:
+        raise ValueError(f"用户不存在: {', '.join(missing)}")
+
+
+def create_change_ticket(user, data: dict, source_ip: str = "") -> dict:
+    """创建草稿（申请人=当前用户）；审批信息与窗口在 submit 时一并提交。"""
+    from apps.change.models import ChangeTicket
+    title = (data.get("title") or "").strip()
+    if not title:
+        raise ValueError("变更标题必填")
+    ct = ChangeTicket.objects.create(
+        ticket_no=_gen_change_no(), title=title,
+        change_type=data.get("change_type") or ChangeTicket.ChangeType.CONFIG,
+        risk_level=data.get("risk_level") or ChangeTicket.RiskLevel.MID,
+        applicant_id=user.id,
+        content=data.get("content") or {},
+        related_script_run_id=data.get("related_script_run_id") or None,
+        related_config_event_id=data.get("related_config_event_id") or None,
+    )
+    _audit_change(user, "create", ct, after={"title": title}, source_ip=source_ip)
+    return {"id": ct.pk, "ticket_no": ct.ticket_no, "status": ct.status}
+
+
+def submit_change_ticket(user, t: object, data: dict, source_ip: str = "") -> dict:
+    """草稿提交审批：校验窗口/人员/内容 -> 状态 approving，并创建通用 Approval 行。"""
+    from apps.change.models import ChangeTicket
+    from apps.automate.models import Approval as AutoApproval
+
+    if not _can_change(user, t, "submit"):
+        raise PermissionError("仅申请人（change.ticket.edit）可提交审批")
+    if t.status != ChangeTicket.Status.DRAFT:
+        raise ValueError(f"仅草稿可提交审批（当前 {t.get_status_display()}）")
+    change_type = data.get("change_type") or t.change_type
+    risk = data.get("risk_level") or t.risk_level
+    if change_type not in ChangeTicket.ChangeType.values:
+        raise ValueError("change_type 不合法")
+    if risk not in ChangeTicket.RiskLevel.values:
+        raise ValueError("risk_level 不合法")
+    plan_start = data.get("plan_start") or t.plan_start
+    plan_end = data.get("plan_end") or t.plan_end
+    if not plan_start or not plan_end:
+        raise ValueError("请填写变更窗口（计划开始/结束）")
+    from django.utils.dateparse import parse_datetime
+    ps = plan_start if isinstance(plan_start, str) else None
+    pe = plan_end if isinstance(plan_end, str) else None
+    if ps:
+        plan_start = parse_datetime(ps) or t.plan_start
+    if pe:
+        plan_end = parse_datetime(pe) or t.plan_end
+    if plan_end <= plan_start:
+        raise ValueError("计划结束时间需晚于开始时间")
+    approver_id = int(data.get("approver_id") or 0)
+    implementer_id = int(data.get("implementer_id") or user.id)
+    verifier_id = int(data.get("verifier_id") or 0)
+    if approver_id <= 0:
+        raise ValueError("请选择审批人")
+    if verifier_id and verifier_id == implementer_id:
+        raise ValueError("验证人不能与实施人为同一人")
+    _ensure_users_exist({"审批人": approver_id, "实施人": implementer_id, "验证人": verifier_id})
+    content = data["content"] if "content" in data else t.content
+    if not isinstance(content, dict) or not (content.get("summary") or "").strip():
+        raise ValueError("请填写变更内容摘要（content.summary）")
+
+    approval = AutoApproval.objects.create(
+        biz_type=AutoApproval.BizType.CHANGE_TICKET, biz_id=t.pk,
+        applicant_id=user.id, approver_id=approver_id, comment="", status=AutoApproval.Status.PENDING)
+    t.change_type = change_type
+    t.risk_level = risk
+    t.plan_start = plan_start
+    t.plan_end = plan_end
+    t.implementer_id = implementer_id
+    t.verifier_id = verifier_id or None
+    t.approver_id = approver_id
+    t.approval_id = approval.pk
+    t.content = content
+    if (data.get("rollback_plan") or "").strip():
+        t.rollback_plan = (data.get("rollback_plan") or "").strip()
+    t.status = ChangeTicket.Status.APPROVING
+    t.save()
+    _audit_change(user, "execute", t, after={"to": t.status, "approval_id": approval.pk}, source_ip=source_ip)
+    return {"status": t.status, "approval_id": approval.pk, "ticket_no": t.ticket_no}
+
+
+def _load_approval(t: object):
+    from apps.automate.models import Approval as AutoApproval
+    return AutoApproval.objects.filter(pk=t.approval_id,
+                                       biz_type=AutoApproval.BizType.CHANGE_TICKET).first()
+
+
+def decide_change_ticket(user, t: object, decision: str, data: dict, source_ip: str = "") -> dict:
+    """审批：approving -> approved / rejected（同步通用 Approval 行）。"""
+    from django.utils import timezone as tz
+    from apps.change.models import ChangeTicket
+    from apps.automate.models import Approval as AutoApproval
+
+    if not _can_change(user, t, decision):
+        raise PermissionError("仅审批人（change.ticket.approve）可审批")
+    if t.status != ChangeTicket.Status.APPROVING:
+        raise ValueError(f"仅待审批变更单可审批（当前 {t.get_status_display()}）")
+    approval = _load_approval(t)
+    if not approval or approval.status != AutoApproval.Status.PENDING:
+        raise ValueError("审批单不存在或已处理")
+    comment = (data.get("comment") or "").strip()
+    if decision == "reject" and not comment:
+        raise ValueError("驳回请填写原因")
+    approval.status = AutoApproval.Status.APPROVED if decision == "approve" else AutoApproval.Status.REJECTED
+    approval.comment = comment
+    approval.decided_at = tz.now()
+    approval.save(update_fields=["status", "comment", "decided_at"])
+    t.status = ChangeTicket.Status.APPROVED if decision == "approve" else ChangeTicket.Status.REJECTED
+    t.save(update_fields=["status", "updated_at"])
+    _audit_change(user, "execute", t, after={"to": t.status, "approval": approval.status}, source_ip=source_ip)
+    return {"status": t.status, "approval": approval.status}
+
+
+def start_change_impl(user, t: object, data: dict, source_ip: str = "") -> dict:
+    """实施：approved -> implementing（记录实际开始）。"""
+    from django.utils import timezone as tz
+    from apps.change.models import ChangeTicket
+    if not _can_change(user, t, "start"):
+        raise PermissionError("仅实施人（change.ticket.execute）可开始实施")
+    if t.status != ChangeTicket.Status.APPROVED:
+        raise ValueError(f"仅已批准变更单可实施（当前 {t.get_status_display()}）")
+    if not t.implementer_id:
+        raise ValueError("未指定实施人")
+    t.status = ChangeTicket.Status.IMPLEMENTING
+    t.actual_start = tz.now()
+    t.save(update_fields=["status", "actual_start", "updated_at"])
+    _audit_change(user, "execute", t, after={"to": t.status}, source_ip=source_ip)
+    return {"status": t.status, "actual_start": t.actual_start.isoformat()}
+
+
+def verify_change(user, t: object, data: dict, source_ip: str = "") -> dict:
+    """验证：implementing -> verifying（记录实际结束与验证结果）。"""
+    from django.utils import timezone as tz
+    from apps.change.models import ChangeTicket
+    if not _can_change(user, t, "verify"):
+        raise PermissionError("仅验证人（change.ticket.execute）可验证")
+    if t.status != ChangeTicket.Status.IMPLEMENTING:
+        raise ValueError(f"仅实施中变更单可验证（当前 {t.get_status_display()}）")
+    result = (data.get("result_desc") or "").strip()
+    if not result:
+        raise ValueError("请填写验证结果")
+    if not t.verifier_id:
+        raise ValueError("未指定验证人")
+    t.status = ChangeTicket.Status.VERIFYING
+    t.actual_end = tz.now()
+    t.result_desc = result
+    t.save(update_fields=["status", "actual_end", "result_desc", "updated_at"])
+    _audit_change(user, "execute", t, after={"to": t.status}, source_ip=source_ip)
+    return {"status": t.status}
+
+
+def close_change(user, t: object, data: dict, source_ip: str = "") -> dict:
+    """关闭：verifying -> closed（变更收尾）。"""
+    from apps.change.models import ChangeTicket
+    if not _can_change(user, t, "close"):
+        raise PermissionError("仅申请人/验证人/实施人（change.ticket.execute）可关闭")
+    if t.status != ChangeTicket.Status.VERIFYING:
+        raise ValueError(f"仅验证中变更单可关闭（当前 {t.get_status_display()}）")
+    if (data.get("result_desc") or "").strip():
+        t.result_desc = (data.get("result_desc") or "").strip()
+    t.status = ChangeTicket.Status.CLOSED
+    t.save(update_fields=["status", "result_desc", "updated_at"])
+    _audit_change(user, "execute", t, after={"to": t.status}, source_ip=source_ip)
+    return {"status": t.status}
+
+
+def rollback_change(user, t: object, data: dict, source_ip: str = "") -> dict:
+    """回滚：implementing/verifying -> rolledback。"""
+    from apps.change.models import ChangeTicket
+    if not _can_change(user, t, "rollback"):
+        raise PermissionError("仅实施人/验证人/申请人（change.ticket.execute）可回滚")
+    if t.status not in (ChangeTicket.Status.IMPLEMENTING, ChangeTicket.Status.VERIFYING):
+        raise ValueError(f"当前状态 {t.get_status_display()} 不可回滚")
+    plan = (data.get("rollback_plan") or "").strip()
+    if not plan:
+        raise ValueError("请填写实际回滚方案")
+    t.rollback_plan = plan
+    if (data.get("result_desc") or "").strip():
+        t.result_desc = (data.get("result_desc") or "").strip()
+    t.status = ChangeTicket.Status.ROLLEDBACK
+    t.save(update_fields=["rollback_plan", "result_desc", "status", "updated_at"])
+    _audit_change(user, "execute", t, after={"to": t.status}, source_ip=source_ip)
+    return {"status": t.status}

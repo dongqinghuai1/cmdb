@@ -72,3 +72,67 @@ class IncidentEvent(TimeStampedModel):
 
     def __str__(self):
         return f"#{self.ticket_id} {self.event_type} by {self.actor_id}"
+
+
+class ChangeTicket(TimeStampedModel):
+    """轻量变更单（ER 4.13 / 12.2-5）：申请->审批->实施->验证->关闭/驳回/回滚。
+
+    审批复用 automate.Approval（biz_type=change_ticket，本模块创建并维护该审批行）；
+    申请/实施/验证三人分离（applicant/implementer/verifier）；不做重型 ITSM。
+    状态机：draft -> approving -> approved -> implementing -> verifying -> closed
+                     |(驳)         |(回滚)         |(回滚)
+                     v             v              v
+                   rejected     rolledback      rolledback
+    """
+
+    class ChangeType(models.TextChoices):
+        CONFIG = "config", "配置变更"
+        DEVICE = "device", "设备变更"
+        SW_UPGRADE = "sw_upgrade", "软件升级"
+        NETWORK = "network", "网络变更"
+
+    class RiskLevel(models.TextChoices):
+        HIGH = "high", "高危"
+        MID = "mid", "中危"
+        LOW = "low", "低危"
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "草稿"
+        APPROVING = "approving", "待审批"
+        APPROVED = "approved", "已批准"
+        IMPLEMENTING = "implementing", "实施中"
+        VERIFYING = "verifying", "验证中"
+        CLOSED = "closed", "已关闭"
+        REJECTED = "rejected", "已驳回"
+        ROLLEDBACK = "rolledback", "已回滚"
+
+    ticket_no = models.CharField(max_length=32, unique=True, db_index=True)
+    title = models.CharField(max_length=255)
+    change_type = models.CharField(max_length=16, choices=ChangeType.choices,
+                                   default=ChangeType.CONFIG, db_index=True)
+    risk_level = models.CharField(max_length=8, choices=RiskLevel.choices,
+                                  default=RiskLevel.MID, db_index=True)
+    plan_start = models.DateTimeField(null=True, blank=True)
+    plan_end = models.DateTimeField(null=True, blank=True)
+    actual_start = models.DateTimeField(null=True, blank=True)
+    actual_end = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices,
+                              default=Status.DRAFT, db_index=True)
+    applicant_id = models.BigIntegerField(db_index=True)
+    implementer_id = models.BigIntegerField(null=True, blank=True)
+    verifier_id = models.BigIntegerField(null=True, blank=True)
+    approver_id = models.BigIntegerField(null=True, blank=True)
+    approval_id = models.BigIntegerField(null=True, blank=True)
+    content = models.JSONField(default=dict, blank=True,
+                               help_text="变更内容与影响面 {summary, impact, steps, affected_device_ids}")
+    related_script_run_id = models.BigIntegerField(null=True, blank=True)
+    related_config_event_id = models.BigIntegerField(null=True, blank=True)
+    rollback_plan = models.TextField(blank=True)
+    result_desc = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "变更单"
+
+    def __str__(self):
+        return f"{self.ticket_no} {self.title} [{self.status}]"
