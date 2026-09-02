@@ -121,6 +121,78 @@
       <el-table-column prop="source_ip" label="来源IP" width="130" />
     </el-table>
   </el-card>
+
+  <el-card style="margin-top:14px">
+    <template #header>技术概览（采集数据 + 扩展入口）</template>
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <el-card shadow="never" style="flex:1;min-width:280px">
+        <template #header>VLAN（{{ tech.vlans?.length || 0 }}）</template>
+        <template v-if="tech.vlans && tech.vlans.length">
+          <el-tag v-for="v in tech.vlans" :key="v" size="small" style="margin:2px 6px 2px 0">VLAN {{ v }}</el-tag>
+        </template>
+        <el-empty v-else description="暂无" :image-size="46" />
+      </el-card>
+      <el-card shadow="never" style="flex:1;min-width:280px">
+        <template #header>路由快照（{{ tech.routes?.length || 0 }} 条）</template>
+        <template v-if="tech.routes && tech.routes.length">
+          <div style="color:#909399;font-size:12px;margin-bottom:6px">
+            快照时间：{{ fmt2(tech.route_meta?.snapshot_at) }}
+          </div>
+          <pre style="max-height:220px;overflow:auto;margin:0;font-size:12px;white-space:pre-wrap">
+{{ (tech.routes || []).slice(0, 120).map(r => JSON.stringify(r)).join("\n") }}</pre>
+        </template>
+        <el-empty v-else description="暂无（待路由采集）" :image-size="46" />
+      </el-card>
+    </div>
+    <div style="margin-top:12px">
+      <b style="font-size:13px">OSPF/BGP 邻居（{{ tech.neighbors?.length || 0 }}）</b>
+      <el-table v-if="tech.neighbors && tech.neighbors.length" :data="tech.neighbors" size="small" max-height="240"
+                style="margin-top:6px">
+        <el-table-column prop="protocol" label="协议" width="70" />
+        <el-table-column prop="vrf" label="VRF" width="90" />
+        <el-table-column prop="neighbor_addr" label="邻居" width="140" />
+        <el-table-column prop="state" label="状态" width="110" />
+        <el-table-column label="最近在线" min-width="140">
+          <template #default="{row}">{{ fmt2(row.last_seen_at) }}</template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-else description="暂无邻居数据" :image-size="46" />
+    </div>
+    <div v-if="tech.ap" style="margin-top:12px">
+      <b style="font-size:13px">无线 AP 信息</b>
+      <el-descriptions :column="4" border size="small" style="margin-top:6px">
+        <el-descriptions-item label="AP名">{{ tech.ap.ap_name }}</el-descriptions-item>
+        <el-descriptions-item label="AP IP">{{ tech.ap.ap_ip || "-" }}</el-descriptions-item>
+        <el-descriptions-item label="型号">{{ tech.ap.ap_model }}</el-descriptions-item>
+        <el-descriptions-item label="客户端">{{ tech.ap.client_count }}</el-descriptions-item>
+        <el-descriptions-item label="2.4G信道">{{ tech.ap.channel_2g || "-" }}</el-descriptions-item>
+        <el-descriptions-item label="5G信道">{{ tech.ap.channel_5g || "-" }}</el-descriptions-item>
+        <el-descriptions-item label="上行交换机">#{{ tech.ap.uplink_switch_id || "-" }}</el-descriptions-item>
+        <el-descriptions-item label="状态">{{ tech.ap.status }}</el-descriptions-item>
+      </el-descriptions>
+    </div>
+    <div style="margin-top:12px">
+      <b style="font-size:13px">登录会话（{{ tech.sessions?.length || 0 }}）</b>
+      <el-table v-if="tech.sessions && tech.sessions.length" :data="tech.sessions" size="small" max-height="240"
+                style="margin-top:6px">
+        <el-table-column prop="username" label="用户" width="110" />
+        <el-table-column prop="source_ip" label="来源IP" width="130" />
+        <el-table-column label="登录时间" min-width="150">
+          <template #default="{row}">{{ fmt2(row.login_at) }}</template>
+        </el-table-column>
+        <el-table-column label="登出时间" min-width="150">
+          <template #default="{row}">{{ fmt2(row.logout_at) || "在线" }}</template>
+        </el-table-column>
+        <el-table-column prop="session_type" label="类型" width="90" />
+        <el-table-column prop="result" label="结果" width="80" />
+      </el-table>
+      <el-empty v-else description="暂无会话记录" :image-size="46" />
+    </div>
+    <div style="margin-top:12px;display:flex;gap:12px;flex-wrap:wrap">
+      <el-alert v-for="(ext, k) in tech.extensions || {}" :key="k" :title="k.toUpperCase() + '：' + ext.note"
+                type="info" :closable="false" style="flex:1;min-width:300px" />
+    </div>
+  </el-card>
 </template>
 
 <script setup>
@@ -136,6 +208,7 @@ const interfaces = ref([]);
 const licenses = ref([]);
 const attachments = ref([]);
 const history = ref([]);
+const tech = ref({ vlans: [], neighbors: [], sessions: [], routes: [], ap: null, extensions: {} });
 const licenseDlg = ref(false);
 const lf = reactive({ license_type: "", seats: 1, expire_at: null, supplier: "", contract_no: "", remark: "" });
 
@@ -154,15 +227,18 @@ onMounted(async () => {
   interfaces.value = (d.interfaces || []).map((i) => ({ ...i, stat: i.stat || null }));
   loadSide();
 });
+const fmt2 = (s) => (s || "").replace("T", " ").slice(0, 19);
 const loadSide = async () => {
-  const [ls, at, hs] = await Promise.all([
+  const [ls, at, hs, tk] = await Promise.all([
     api.get("/cmdb/licenses/", { params: { device_id: devId } }),
     api.get("/cmdb/attachments/", { params: { device_id: devId } }),
     api.get(`/cmdb/devices/${devId}/history/`),
+    api.get(`/cmdb/devices/${devId}/tech/`).catch(() => ({})),
   ]);
   licenses.value = ls.results || (Array.isArray(ls) ? ls : []);
   attachments.value = at;
   history.value = hs || [];
+  tech.value = tk || tech.value;
 };
 
 // 维保

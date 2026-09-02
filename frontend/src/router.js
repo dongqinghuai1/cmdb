@@ -13,6 +13,7 @@ const routes = [
       { path: "ncm", component: () => import("./pages/Ncm.vue"), meta: { title: "配置管理" } },
       { path: "automate", component: () => import("./pages/Automate.vue"), meta: { title: "自动化运维" } },
       { path: "changes", component: () => import("./pages/Changes.vue"), meta: { title: "变更管理" } },
+      { path: "cmdb-tools", component: () => import("./pages/Cmtools.vue"), meta: { title: "设备运营" } },
       { path: "logs", component: () => import("./pages/Logs.vue"), meta: { title: "日志中心" } },
       { path: "ipam", component: () => import("./pages/Ipam.vue"), meta: { title: "IP 管理" } },
       { path: "devices", component: () => import("./pages/Devices.vue"), meta: { title: "设备台账" } },

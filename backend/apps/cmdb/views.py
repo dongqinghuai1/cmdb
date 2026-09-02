@@ -70,7 +70,8 @@ class DeviceViewSet(BaseModelViewSet):
     filterset_fields = {"region": ["exact"], "site": ["exact"], "model": ["exact"],
                         "usage_tag": ["exact"], "online_status": ["exact"],
                         "lifecycle_status": ["exact"], "vendor": ["exact"],
-                        "driver_type": ["exact"], "rack": ["exact", "isnull"]}
+                        "hw_model": ["exact"], "driver_type": ["exact"],
+                        "rack": ["exact", "isnull"]}
     search_fields = ["name", "sn", "hostname", "asset_no", "manage_ip"]
 
     def create(self, request, *args, **kwargs):
@@ -262,6 +263,47 @@ class DeviceViewSet(BaseModelViewSet):
                 "ORDER BY id DESC LIMIT 100", [pk])
             cols = [c[0] for c in cur.description]
             return Response([dict(zip(cols, r)) for r in cur.fetchall()])
+
+    # ---------- 360° 技术概览（R2：已采集数据可视化 + 扩展入口） ----------
+    @action(detail=True, methods=["get"], url_path="tech")
+    def tech(self, request, pk=None):
+        d = self.get_object()
+        from apps.cmdb.models import RouteTableSnapshot, RoutingNeighbor
+        neighbors = list(RoutingNeighbor.objects.filter(device_id=d.pk).values(
+            "protocol", "vrf", "neighbor_addr", "state", "last_seen_at")[:200])
+        rt = RouteTableSnapshot.objects.filter(device_id=d.pk).order_by("-snapshot_at").first()
+        routes = (rt.routes[:500] if rt and rt.routes else [])
+        route_meta = ({"snapshot_at": rt.snapshot_at, "count": len(routes)} if rt else None)
+        ap = None
+        ai = getattr(d, "ap_info", None)
+        if ai:
+            ap = {"ap_name": ai.ap_name, "ap_ip": str(ai.ap_ip or ""), "ap_model": ai.ap_model,
+                  "channel_2g": ai.channel_2g, "channel_5g": ai.channel_5g,
+                  "tx_power": ai.tx_power, "client_count": ai.client_count,
+                  "uplink_switch_id": ai.uplink_switch_id, "status": ai.status}
+        vlan_set = set()
+        for i in d.interfaces.all()[:500]:
+            if i.native_vlan:
+                vlan_set.add(i.native_vlan)
+            for v in (i.vlan_ids or []):
+                if isinstance(v, int):
+                    vlan_set.add(v)
+        sessions = []
+        with connection.cursor() as cur:
+            cur.execute(
+                "SELECT username, source_ip, login_at, logout_at, session_type, result "
+                "FROM usage_loginevent WHERE device_id=%s "
+                "ORDER BY login_at DESC LIMIT 20", [d.pk])
+            cols = [c[0] for c in cur.description]
+            sessions = [dict(zip(cols, r)) for r in cur.fetchall()]
+        return Response({
+            "neighbors": neighbors, "routes": routes, "route_meta": route_meta,
+            "ap": ap, "vlans": sorted(vlan_set), "sessions": sessions,
+            "extensions": {
+                "acl": {"supported": False, "note": "ACL 策略采集驱动未接入（需设备 show access-lists 采集，R3 建模）"},
+                "ipsec": {"supported": False, "note": "IPSec/IKE 隧道采集驱动未接入（需防火墙 VPN 状态采集，R3 建模）"},
+            },
+        })
 
     # ---------- 软件版本一致性（5.5.4 P1 首步：型号维度版本分布） ----------
     @action(detail=False, methods=["get"], url_path="software-summary")
