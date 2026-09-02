@@ -1,7 +1,7 @@
 # 交接文档（面向下一个开发智能体）
 
-> 最后更新：2026-09-03（CMDB 基础补齐 R2：设备运营页 / 技术概览卡）。
-> 一期+二期已完成并实测通过；三期「自动化运维」（M2026-09-02）、「轻量事件单」（M2026-09-02b）、「轻量变更单」（M2026-09-02c）、「CMDB 基础补齐 R1」（M2026-09-03）已上线，见文末里程碑；R2「设备运营/技术概览」见 §12。
+> 最后更新：2026-09-03（CMDB 基础补齐 R3：ACL/IPSec TechSnapshot 建模与入口，目标 ①-④ 全部完成）。
+> 一期+二期已完成并实测通过；三期「自动化运维」（M2026-09-02）、「轻量事件单」（M2026-09-02b）、「轻量变更单」（M2026-09-02c）、「CMDB 基础补齐 R1/R2/R3」（M2026-09-03/03b/03c）已上线，见文末里程碑。
 > 读完本文 + DEPLOY.md + DEVELOPMENT.md 即可接手。
 
 ## 1. 当前状态总览
@@ -12,7 +12,7 @@
 |---|---|---|
 | system | ✅ 完成 | RBAC+数据权限、凭据保险箱(AES-GCM)、通知渠道(飞书webhook)、审计、ApiToken |
 | dcim | ✅ 完成 | 地区->机房->机柜树、机柜 U 位可视化(elevation API)、线缆表、**机房平面图 DIY 编辑器** |
-| cmdb | ✅ 完成（R1/R2 补齐） | 动态模型(attrs JSONB)、设备台账、Excel 导入导出、360° 视图、拖拽上架/换位/下架；**R1：数据质量看板、回收站、附件、维保License、变更历史、动态分组evaluate、软件版本一致性；R2：设备运营页(分组规则UI+软件一致性)+360技术概览(邻居/VLAN/路由/AP/会话+ACL/IPSec扩展入口)** |
+| cmdb | ✅ 完成（R1-R3 补齐） | 动态模型(attrs JSONB)、设备台账、Excel 导入导出、360° 视图、拖拽上架/换位/下架；**R1：数据质量看板、回收站、附件、维保License、变更历史、动态分组evaluate、软件版本一致性；R2：设备运营页+360技术概览(邻居/VLAN/路由/AP/会话)；R3：ACL/IPSec TechSnapshot 建模(写入+最新透出)** |
 | monitor | ✅ 骨架 | 采集器注册、SNMP 采集引擎(pysnmp, IF-MIB)、VM 统一 label 写入、分片任务 collect_shard |
 | usage | ✅ 完成 | 占用/预约(时间窗排他)、LoginEvent 表 |
 | alert | ✅ 骨架 | 规则引擎(metric/state)、dedup_key 去重、飞书通知、ack/resolve 闭环 |
@@ -73,6 +73,7 @@
 | **verify_change.py** | **变更单：申请/提交校验 / 审批复用 Approval / 实施验证关闭 / 驳回 / 回滚 / 角色护栏 / 审计** | **28 PASS** |
 | **verify_cmdb_r1.py** | **CMDB R1：质量看板 / 回收站 / 附件(本地卷存储) / 维保 / 变更历史 / 动态分组 / 软件一致性 / 只读负例** | **33 PASS（sqlite 与容器 PG 各一遍）** |
 | **verify_cmdb_r2.py** | **CMDB R2：tech 概览端点区块/扩展入口 / 动态分组仅预览不改成员 / 软件版本聚合与 hw_model 过滤** | **9 PASS（sqlite 与容器 PG 各一遍）** |
+| **verify_cmdb_r3.py** | **CMDB R3：TechSnapshot 越权/参数校验/写入/最新覆盖/tech 透出/占位回落/只读可见** | **7 PASS（sqlite 与容器 PG 各一遍）** |
 | smoke_test.py | 端口级冒烟（登录->建柜->上架->冲突） | 10 PASS |
 | seed_demo.py | 演示数据：2 地区/2 机房/3 机柜/10 设备 | 幂等 |
 | seed_floorplan.py | 上海机房平面图示例布局 | 幂等 |
@@ -214,3 +215,19 @@
 **验证**：`scripts/verify_cmdb_r2.py` 9 PASS（sqlite 与容器 PG 各一遍，含只读 viewer_pg 可读、动态分组预览不改成员、hw_model 过滤覆盖分布合计）；`verify_cmdb_r1.py` 33 PASS 复跑不回归；`/cmdb-tools` 页面 200、容器 healthy。
 
 **待办/坑**：① ACL/IPSec 仅入口设计，采集建模待设备驱动落地（见 objective ④，建议 R3 建 TechSnapshot 通用表 + fortigate/asa driver 采集 vpn/access-list 状态）；② 路由快照内容多时 360 仅展示前 120 条 JSON 文本，未做 prefix 表格/差分高亮（接 NCM 路由快照视图后替换）；③ 动态分组规则字段仍 3 个，condition 扩展在 evaluate 服务里集中维护；④ 会话 Tab 数据来自 usage_loginevent，量大的表建议按月分区（ER D12 已列技术债）。
+
+---
+
+## 13. 里程碑 M2026-09-03c：ACL/IPSec 等扩展概览建模（objective ④ 收口）
+
+**范围**：把 360 技术概览里"未接入"的 ACL/IPSec 占位变成**真实建模**——通用技术快照表 + 采集驱动写入路径 + 概览透出，设备驱动解析落地后即可无感展示。
+
+**后端**：
+- 新模型 `TechSnapshot`（迁移 cmdb.0002，表 `cmdb_techsnapshot`）：device_id + kind(acl/ipsec，choices 可扩) + payload jsonb + created_at；`Meta.ordering=-id` + `(device_id, kind)` 索引；**读取语义=最新一条覆盖**（采集驱动每次写新行）。
+- 写入 API：`POST /cmdb/devices/{id}/tech-snapshot/` body `{kind, payload:{...}}`（execute 权限；kind 白名单；payload 必须对象且 ≤200KB），供 fortigate/asa 等驱动解析设备输出后调用。
+- `GET .../tech/` extensions 逻辑升级：kind 有快照 → `{supported:true, updated_at, payload}`；无 → 占位 `{supported:false, note}`（note 指引写入口）。OSPF 邻居/BGP 走既有 cmdb_routingneighbor，不重复建模。
+- 前端 `Device360.vue` 扩展卡：supported 显示"已采集"标签 + 快照时间 + payload 只读预览（1600 字符内）；未接入显示空态说明。
+
+**验证**：`scripts/verify_cmdb_r3.py` 7 PASS（sqlite 与容器 PG 各一遍）：只读 403 / 非法 kind 400 / payload 非对象 400 / 写快照 201 / tech 透出**最新**快照 / 未写前占位回落 / 只读可见。`/cmdb-tools` 页面 200。
+
+**待办/坑**：① payload 结构规范由各采集驱动自定（表结构刻意通用）；建议 fortigate 驱动输出 `{tunnels:[{name,peer,status,bytes_in/out,up_since}]}`、asa `{acls:[{id,name,action,protocol,src,dst,hits}]}` 供前端将来做表格化；② 快照无限增长——后续按 kind+device 只保留 N 天/条（清理由 celery 周期任务做）；③ 本表未与 NCM/告警联动（如隧道 down 转告警属四期/运营项）。

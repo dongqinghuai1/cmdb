@@ -11,7 +11,7 @@ from rest_framework.response import Response
 
 from apps.cmdb import storage
 from apps.cmdb.models import (CiModel, CiModelAttr, Device, DeviceAttachment,
-                              DeviceGroup, License)
+                              DeviceGroup, License, TechSnapshot)
 from apps.cmdb.serializers import (CiModelAttrSerializer, CiModelSerializer,
                                    DeviceGroupSerializer, DeviceSerializer,
                                    DeviceInterfaceSerializer, BusinessSerializer)
@@ -296,14 +296,40 @@ class DeviceViewSet(BaseModelViewSet):
                 "ORDER BY login_at DESC LIMIT 20", [d.pk])
             cols = [c[0] for c in cur.description]
             sessions = [dict(zip(cols, r)) for r in cur.fetchall()]
+        extensions = {}
+        for kind, note in (("acl", "ACL 策略采集驱动未接入"), ("ipsec", "IPSec/IKE 隧道采集驱动未接入")):
+            ts = TechSnapshot.objects.filter(device_id=d.pk, kind=kind).first()
+            if ts:
+                extensions[kind] = {"supported": True, "updated_at": ts.created_at,
+                                    "payload": ts.payload}
+            else:
+                extensions[kind] = {"supported": False,
+                                    "note": f"{note}（R3 已建模 cmdb_techsnapshot：采集驱动解析后 POST tech-snapshot 落库即在此展示）"}
         return Response({
             "neighbors": neighbors, "routes": routes, "route_meta": route_meta,
             "ap": ap, "vlans": sorted(vlan_set), "sessions": sessions,
-            "extensions": {
-                "acl": {"supported": False, "note": "ACL 策略采集驱动未接入（需设备 show access-lists 采集，R3 建模）"},
-                "ipsec": {"supported": False, "note": "IPSec/IKE 隧道采集驱动未接入（需防火墙 VPN 状态采集，R3 建模）"},
-            },
+            "extensions": extensions,
         })
+
+    @action(detail=True, methods=["post"], url_path="tech-snapshot")
+    def tech_snapshot(self, request, pk=None):
+        """扩展技术概览快照写入（ACL/IPSec 等）：body {kind: acl|ipsec, payload:{...}}。
+
+        供采集驱动(fortigate/asa)解析设备输出后调用；每次写一条新记录，读取取最新。
+        """
+        _need_execute(request.user)
+        d = self.get_object()
+        kind = request.data.get("kind")
+        if kind not in TechSnapshot.Kind.values:
+            return Response({"detail": f"kind must be in {list(TechSnapshot.Kind.values)}"}, status=400)
+        payload = request.data.get("payload")
+        if not isinstance(payload, dict):
+            return Response({"detail": "payload must be object"}, status=400)
+        import json as _json
+        if len(_json.dumps(payload, ensure_ascii=False)) > 200_000:
+            return Response({"detail": "payload too large (max ~200KB)"}, status=400)
+        ts = TechSnapshot.objects.create(device_id=d.pk, kind=kind, payload=payload)
+        return Response({"id": ts.id, "kind": kind, "created_at": ts.created_at}, status=201)
 
     # ---------- 软件版本一致性（5.5.4 P1 首步：型号维度版本分布） ----------
     @action(detail=False, methods=["get"], url_path="software-summary")

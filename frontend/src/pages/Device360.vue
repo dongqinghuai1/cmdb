@@ -189,8 +189,22 @@
       <el-empty v-else description="暂无会话记录" :image-size="46" />
     </div>
     <div style="margin-top:12px;display:flex;gap:12px;flex-wrap:wrap">
-      <el-alert v-for="(ext, k) in tech.extensions || {}" :key="k" :title="k.toUpperCase() + '：' + ext.note"
-                type="info" :closable="false" style="flex:1;min-width:300px" />
+      <el-card v-for="(ext, k) in tech.extensions || {}" :key="k" shadow="never"
+               style="flex:1;min-width:300px">
+        <template #header>
+          <b>{{ k.toUpperCase() }}</b>
+          <el-tag v-if="ext.supported" size="small" type="success" style="margin-left:8px">已采集</el-tag>
+          <el-tag v-else size="small" type="info" style="margin-left:8px">未接入</el-tag>
+        </template>
+        <template v-if="ext.supported">
+          <div style="color:#909399;font-size:12px;margin-bottom:6px">
+            快照时间：{{ fmt2(ext.updated_at) }}
+          </div>
+          <pre style="max-height:180px;overflow:auto;margin:0;font-size:12px;white-space:pre-wrap">
+{{ JSON.stringify(ext.payload, null, 1).slice(0, 1600) }}</pre>
+        </template>
+        <el-empty v-else :description="ext.note || '待采集驱动接入'" :image-size="46" />
+      </el-card>
     </div>
   </el-card>
 </template>

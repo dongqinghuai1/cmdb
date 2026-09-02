@@ -229,6 +229,26 @@ class RouteTableSnapshot(models.Model):
     route_hash = models.CharField(max_length=64, db_index=True)
 
 
+class TechSnapshot(TimeStampedModel):
+    """扩展技术概览通用快照（R3 建模）：ACL/IPSec 等尚无专用采集表的品类。
+
+    采集驱动(fortigate/asa 等)解析设备输出后调用 save_tech_snapshot 落库；
+    360 技术概览按 device_id + kind 取最新一条透出，取代 extensions 里的“未支持”占位。
+    kind 与 extensions 键对齐：acl / ipsec / 未来可加其他品类。
+    """
+    class Kind(models.TextChoices):
+        ACL = "acl", "acl"
+        IPSEC = "ipsec", "ipsec"
+
+    device_id = models.BigIntegerField(db_index=True)
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    payload = models.JSONField(default=dict, blank=True)  # 采集结果原文（结构化字段见采集驱动）
+
+    class Meta:
+        ordering = ["-id"]
+        indexes = [models.Index(fields=["device_id", "kind"], name="cmdb_techs_dev_kind")]
+
+
 class RoutingNeighbor(TimeStampedModel):
     device_id = models.BigIntegerField(db_index=True)
     protocol = models.CharField(max_length=8, choices=[("ospf", "ospf"), ("bgp", "bgp")])
