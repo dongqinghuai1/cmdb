@@ -458,6 +458,96 @@ class DeviceViewSet(BaseModelViewSet):
             r["operator"] = names.get(r["operator_id"])
         return Response(rows)
 
+    # ---------- 借还台账（5.17 使用与共享：borrow/return ↔ usage_status 联动） ----------
+    LOAN_OVERDUE_DAYS = 30
+
+    @action(detail=False, methods=["get"], url_path="loan-summary")
+    def loan_summary(self, request):
+        """全局在借设备台账 + 最近借还动态；设备仅统计未删除。"""
+        from django.contrib.auth import get_user_model
+        events = list(DeviceAssetEvent.objects.filter(event_type__in=("borrow", "return"))
+                      .order_by("-occurred_at", "-id").values(
+                          "id", "device_id", "event_type", "occurred_at",
+                          "counterparty", "operator_id", "detail")[:800])
+        alive = set(Device.objects.filter(deleted_at__isnull=True).values_list("id", flat=True))
+        devmap = {d.id: {"name": d.name, "manage_ip": str(d.manage_ip or ""),
+                         "region": d.region.name if d.region else "",
+                         "site": d.site.name if d.site else ""}
+                  for d in Device.objects.filter(id__in=alive).select_related("region", "site")}
+        uids = {e["operator_id"] for e in events if e.get("operator_id")}
+        names = dict(get_user_model().objects.filter(id__in=uids).values_list("id", "username"))
+        borrowed, activity, seen = [], [], set()
+        for e in events:
+            did = e["device_id"]
+            info = devmap.get(did)
+            if info and len(activity) < 40:
+                activity.append({**info, "device_id": did, "event_type": e["event_type"],
+                                 "occurred_at": e["occurred_at"], "counterparty": e["counterparty"],
+                                 "operator": names.get(e["operator_id"]),
+                                 "note": (e.get("detail") or {}).get("note", "")})
+            if did in seen or not info:
+                continue
+            seen.add(did)
+            if e["event_type"] == "borrow":
+                days = (timezone.now() - e["occurred_at"]).days
+                borrowed.append({**info, "device_id": did, "holder": e["counterparty"],
+                                 "borrowed_at": e["occurred_at"], "days": days,
+                                 "operator": names.get(e["operator_id"]),
+                                 "note": (e.get("detail") or {}).get("note", "")})
+        return Response({
+            "borrowed": borrowed,
+            "activity": activity,
+            "threshold_days": self.LOAN_OVERDUE_DAYS,
+            "stats": {"borrowed": len(borrowed),
+                      "overdue": sum(1 for b in borrowed
+                                     if b["days"] >= self.LOAN_OVERDUE_DAYS)},
+        })
+
+    @action(detail=True, methods=["post"], url_path="usage-claim")
+    def usage_claim(self, request, pk=None):
+        """借出/归还：body {claim: borrow|return, counterparty?, occurred_at?, note?}。
+
+        borrow → usage_status=occupied + 资产事件(borrow)；return → idle + 事件(return)。
+        重复借出/未借先归返回 400（edit 权限 + audit）。
+        """
+        _need_edit(request.user)
+        dev = self.get_object()
+        claim = request.data.get("claim")
+        occurred = request.data.get("occurred_at") or timezone.now()
+        note = request.data.get("note") or ""
+        old = dev.usage_status
+        ev = None
+        if claim == "borrow":
+            if old == Device.UsageStatus.OCCUPIED:
+                return Response({"detail": "设备已在借（先归还再借出）"}, status=400)
+            counterparty = (request.data.get("counterparty") or "").strip()
+            if not counterparty:
+                return Response({"detail": "counterparty 必填（借给谁/部门/单号）"}, status=400)
+            dev.usage_status = Device.UsageStatus.OCCUPIED
+            dev.save(update_fields=["usage_status", "updated_at"])
+            ev = DeviceAssetEvent.objects.create(
+                device_id=dev.pk, event_type="borrow", occurred_at=occurred,
+                operator_id=request.user.id, counterparty=counterparty,
+                detail={"note": note} if note else {})
+        elif claim == "return":
+            if old != Device.UsageStatus.OCCUPIED:
+                return Response({"detail": "设备当前非在借状态，无法归还"}, status=400)
+            dev.usage_status = Device.UsageStatus.IDLE
+            dev.save(update_fields=["usage_status", "updated_at"])
+            ev = DeviceAssetEvent.objects.create(
+                device_id=dev.pk, event_type="return", occurred_at=occurred,
+                operator_id=request.user.id, counterparty=request.data.get("counterparty", ""),
+                detail={"note": note} if note else {})
+        else:
+            return Response({"detail": "claim must be borrow/return"}, status=400)
+        from common.audit import write_audit
+        write_audit(request.user, "update", "Device", dev.pk,
+                    before={"usage_status": old}, after={"usage_status": dev.usage_status,
+                                                         "claim": claim, "event_id": ev.id},
+                    source_ip=request.META.get("REMOTE_ADDR", ""))
+        return Response({"device_id": dev.pk, "usage_status": dev.usage_status,
+                         "claim": claim, "event_id": ev.id})
+
     # ---------- 保修到期提醒（5.5.7 P1：30/60/90/180 + 已过期） ----------
     @action(detail=False, methods=["get"], url_path="warranty-expiring")
     def warranty_expiring(self, request):

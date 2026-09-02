@@ -173,6 +173,72 @@
         </el-table>
       </el-card>
     </el-tab-pane>
+
+    <el-tab-pane label="设备借还" name="loan">
+      <el-card shadow="never">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+          <el-tag type="warning">在借 {{ LS.stats?.borrowed ?? 0 }}</el-tag>
+          <el-tag :type="(LS.stats?.overdue || 0) > 0 ? 'danger' : 'success'">
+            逾期≥{{ LS.threshold_days ?? 30 }}天 {{ LS.stats?.overdue ?? 0 }}</el-tag>
+          <el-button type="primary" size="small" style="margin-left:auto" @click="openLoan">
+            借出设备</el-button>
+        </div>
+        <el-table :data="LS.borrowed || []" size="small" max-height="280"
+                  @row-click="(r) => $router.push('/devices/' + r.device_id)" style="cursor:pointer">
+          <el-table-column prop="name" label="设备" min-width="110" />
+          <el-table-column prop="manage_ip" label="管理IP" width="120" />
+          <el-table-column prop="site" label="站点" width="90" />
+          <el-table-column prop="holder" label="借用人/部门" width="130" />
+          <el-table-column label="借出时间" width="160">
+            <template #default="{row}">{{ fmtL(row.borrowed_at) }}</template>
+          </el-table-column>
+          <el-table-column label="天数" width="80">
+            <template #default="{row}">
+              <el-tag size="small" :type="row.days >= (LS.threshold_days || 30) ? 'danger' : 'warning'">
+                {{ row.days }} 天</el-tag></template>
+          </el-table-column>
+          <el-table-column prop="operator" label="经手人" width="90" />
+          <el-table-column label="操作" width="80" align="center">
+            <template #default="{row}">
+              <el-button link type="success" @click.stop="returnLoan(row)">归还</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty v-if="!(LS.borrowed || []).length" description="暂无在借设备" :image-size="46" />
+        <el-divider content-position="left" style="margin:10px 0">最近借还动态</el-divider>
+        <el-table :data="LS.activity || []" size="small" max-height="220">
+          <el-table-column label="时间" width="160">
+            <template #default="{row}">{{ fmtL(row.occurred_at) }}</template>
+          </el-table-column>
+          <el-table-column prop="name" label="设备" width="110" />
+          <el-table-column label="动作" width="80">
+            <template #default="{row}">
+              <el-tag size="small" :type="row.event_type === 'borrow' ? 'warning' : 'success'">
+                {{ row.event_type === 'borrow' ? '借出' : '归还' }}</el-tag></template>
+          </el-table-column>
+          <el-table-column prop="counterparty" label="对方" width="120" />
+          <el-table-column prop="operator" label="操作人" width="90" />
+          <el-table-column prop="note" label="备注" min-width="120" />
+        </el-table>
+      </el-card>
+      <el-dialog v-model="loanDlg" title="借出设备（占用标记）" width="520px">
+        <el-form label-width="90px" size="small">
+          <el-form-item label="设备" required>
+            <el-select v-model="loanF.device_id" filterable style="width:100%" placeholder="仅列出空闲(idle)设备">
+              <el-option v-for="d in freeDevs" :key="d.id" :label="d.name + '（' + (d.manage_ip || '-') + '）'"
+                         :value="d.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="借给谁" required>
+            <el-input v-model="loanF.counterparty" placeholder="部门/人员/借条单号" />
+          </el-form-item>
+          <el-form-item label="备注"><el-input v-model="loanF.note" /></el-form-item>
+        </el-form>
+        <template #footer><el-button @click="loanDlg=false">取消</el-button>
+          <el-button type="primary" :disabled="!loanF.device_id || !loanF.counterparty.trim()"
+                     @click="doBorrow">确认借出</el-button></template>
+      </el-dialog>
+    </el-tab-pane>
   </el-tabs>
 </template>
 
@@ -339,10 +405,38 @@ const pickWarranty = async (k) => {
     : allWr.value.filter((x) => x.days_left >= 0 && x.days_left <= Number(k));
 };
 
+const LS = ref({});
+const freeDevs = ref([]);
+const loanDlg = ref(false);
+const loanF = reactive({ device_id: null, counterparty: "", note: "" });
+const loadLoans = async () => { LS.value = await api.get("/cmdb/devices/loan-summary/"); };
+const openLoan = async () => {
+  loanDlg.value = true;
+  loanF.device_id = null; loanF.counterparty = ""; loanF.note = "";
+  const r = await api.get("/cmdb/devices/", { params: { usage_status: "idle", page_size: 300 } });
+  freeDevs.value = r.results || [];
+};
+const doBorrow = async () => {
+  await api.post(`/cmdb/devices/${loanF.device_id}/usage-claim/`,
+    { claim: "borrow", counterparty: loanF.counterparty, note: loanF.note });
+  ElMessage.success("已借出并标记占用");
+  loanDlg.value = false;
+  loadLoans();
+};
+const returnLoan = async (row) => {
+  await ElMessageBox.confirm(`确认归还「${row.name}」？占用标记将释放为空闲。`, "归还确认",
+    { type: "warning" });
+  await api.post(`/cmdb/devices/${row.device_id}/usage-claim/`, { claim: "return" });
+  ElMessage.success("已归还（释放占用）");
+  loadLoans();
+};
+const fmtL = (s) => (s ? String(s).replace("T", " ").slice(0, 16) : "-");
+
 onMounted(async () => {
   loadGroups();
   loadSw();
   loadWarranty();
+  loadLoans();
   const [rg, md] = await Promise.all([
     api.get("/dcim/regions/", { params: { page_size: 100 } }),
     api.get("/cmdb/models/", { params: { page_size: 100 } }),

@@ -360,3 +360,15 @@
   - Tab 形态与系统清单：形态/型号类别/OS 版本/厂商/用途分布，点 OS 行或按 形态/类别/关键字 过滤设备明细（行进 360）。
 - **验证**：`scripts/verify_bizsys.py` 12 PASS ×2（sqlite op_low / 容器 PG viewer_pg）：矩阵结构、临时业务建-归属-add-过滤-汇总-remove-清理全链路、只读归属维护 403、is_virtual 过滤数与汇总一致、清理无残留。
 - **待办/坑**：① Business CRUD 已有（BaseModelViewSet，cmdb.device 门禁）但无独立菜单（页面入口内嵌本页+设备台账）；② system-summary 未含 attrs 动态字段（硬件配置/内核细项在 attrs，需按模型模板聚合）；③ 应用服务/备份状态仍需采集（IA 1.2 远期）。
+
+---
+
+## 23. 里程碑 M2026-09-09：设备借还台账（占用/释放联动，IA 5.17）
+
+- **范围**：把设备"借出/归还"做成闭环台账——借出即占用（usage_status=occupied）、归还释放为 idle；逾期（≥30 天）可审计；借还即资产事件留痕。桌面/机房/审计角色的公共底座。
+- **后端**（apps/cmdb/views.py）：
+  - `GET /cmdb/devices/loan-summary/`：按设备最近事件推断在借集合（设备仅统计未删除、孤儿不计入）+ 最近 40 条借还动态 + stats{borrowed, overdue}；
+  - `POST /cmdb/devices/{id}/usage-claim/`：{claim: borrow|return, counterparty?, occurred_at?, note?}——借出需 counterparty（重复借出 400）、置 occupied 并建 borrow 事件；归还仅 occupied 可归（提前归 400）、置 idle 并建 return 事件；均写 audit(update)。
+- **前端**：Cmtools「设备运营」新增 Tab「设备借还」：在借清单（天数/逾期标红/点行进 360/归还按钮）+ 借出弹窗（仅列出 idle 设备）+ 最近借还动态表。
+- **验证**：`scripts/verify_loans.py` 13 PASS ×2（sqlite op_low / 容器 PG viewer_pg）：只读 403、缺对方 400、历史时间借出→台账在借 days≥40 overdue≥1、重复借出/提前归还 400、归还释放 idle、借还事件双留痕、purge 孤儿不计入。
+- **待办/坑**：① overdue 阈值目前常量 30（未做成参数/按设备类型差异）；② 借出仅走 usage-claim（旧"手工事件"路径不改 usage_status，可能产生账外状态——后续建议收敛到 usage-claim 单一入口）；③ 归还时 counterparty/实还日期归还凭证尚未建模（预留 note）。
