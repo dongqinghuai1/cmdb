@@ -3,6 +3,7 @@
 """
 from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand
+from django.db.models import Q
 
 from apps.system.models import NotifyChannel, Permission, Role
 
@@ -49,6 +50,16 @@ class Command(BaseCommand):
             ("change.ticket.edit", "变更申请/提交", "变更管理", "edit"),
             ("change.ticket.execute", "变更实施/验证/关闭", "变更管理", "execute"),
             ("change.ticket.approve", "变更审批", "变更管理", "approve"),
+            # 导航权限点（menu.*）：供 RBAC 动态菜单按角色过滤，非功能门禁（后端仍按功能码拦截）
+            ("menu.home", "工作台导航", "工作台", "view"),
+            ("menu.monitor", "监控告警导航", "监控与告警", "view"),
+            ("menu.net", "网络导航", "网络", "view"),
+            ("menu.asset", "设备台账导航", "资产与机房", "view"),
+            ("menu.dcim", "机房导航", "资产与机房", "view"),
+            ("menu.workflow", "流程自动化导航", "流程与自动化", "view"),
+            ("menu.security", "安全合规导航", "安全与合规", "view"),
+            ("menu.log", "日志导航", "日志中心", "view"),
+            ("menu.sysadmin", "系统管理导航", "系统管理", "view"),
         ]
         for code, name, menu, action in perms:
             Permission.objects.get_or_create(code=code, defaults={"name": name, "menu": menu, "action": action})
@@ -58,9 +69,33 @@ class Command(BaseCommand):
         admin_role.permissions.set(Permission.objects.all())
         netops, _ = Role.objects.get_or_create(code="net_ops", defaults={"name": "网络运维", "builtin": True})
         netops.permissions.set(Permission.objects.filter(
-            code__regex=r"^(dcim|cmdb|monitor|alert|inspect|automate|change)\."))
+            Q(code__regex=r"^(dcim|cmdb|monitor|alert|inspect|automate|change)\.") |
+            Q(code__startswith="menu.")))
         readonly, _ = Role.objects.get_or_create(code="readonly", defaults={"name": "只读", "builtin": True})
         readonly.permissions.set(Permission.objects.filter(action="view"))
+
+        # 2b. 角色化演示角色（导航码决定"看到哪些菜单"，功能码决定"点进去能否用"）
+        def _persona(role_code, name, func_codes, nav_codes):
+            role, _ = Role.objects.get_or_create(code=role_code,
+                                                 defaults={"name": name, "builtin": True})
+            role.permissions.set(Permission.objects.filter(code__in=func_codes + nav_codes))
+            return role
+
+        _persona("net_admin", "网络管理员", [
+            "cmdb.device.view", "dcim.region.view", "dcim.rack.view",
+            "alert.event.view", "change.ticket.view",
+        ], ["menu.home", "menu.monitor", "menu.net", "menu.asset", "menu.dcim", "menu.workflow"])
+        _persona("sys_admin", "系统运维", [
+            "cmdb.device.view", "cmdb.model.view", "monitor.collector.view", "monitor.log.view",
+            "alert.event.view", "alert.rule.view", "inspect.template.view", "inspect.run.view",
+            "automate.script.view", "automate.run.view", "change.incident.view",
+        ], ["menu.home", "menu.monitor", "menu.asset", "menu.dcim", "menu.workflow", "menu.log"])
+        _persona("dcim_admin", "机房运维", [
+            "cmdb.device.view", "cmdb.device.edit", "cmdb.device.execute",
+            "dcim.region.view", "dcim.rack.view", "dcim.rack.edit",
+        ], ["menu.home", "menu.asset", "menu.dcim"])
+        auditor_role = _persona("auditor", "审计员", ["system.audit.view"],
+                                ["menu.home", "menu.security"])
 
         # 3. 管理员
         admin, created = User.objects.get_or_create(username="admin", is_superuser=True, is_staff=True)
@@ -69,6 +104,22 @@ class Command(BaseCommand):
             admin.save()
             admin.roles.add(admin_role)
             self.stdout.write("admin 创建成功，初始密码 nops@2025（务必修改）")
+
+        # 3b. 角色化演示账号（密码 NopsTest@2025；每次运行重置密码与角色，幂等）
+        for uname, role in [
+            ("net_demo", Role.objects.get(code="net_admin")),
+            ("sys_demo", Role.objects.get(code="sys_admin")),
+            ("dcim_demo", Role.objects.get(code="dcim_admin")),
+            ("auditor", auditor_role),
+        ]:
+            u, _ = User.objects.get_or_create(username=uname)
+            u.set_password("NopsTest@2025")
+            u.is_active = True
+            u.is_staff = False
+            u.is_superuser = False
+            u.save()
+            u.roles.set([role])
+            self.stdout.write(f"{uname} 角色 {role.name} 就绪")
 
         # 4. 默认飞书渠道（占位，webhook 待填）
         NotifyChannel.objects.get_or_create(

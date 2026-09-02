@@ -300,3 +300,22 @@
 - **演示账号**：新增角色“审计员”+用户 `auditor/NopsTest@2025`（仅 system.audit.view）——sqlite 与容器 PG 均已种入，登录后菜单仅「工作台 + 操作审计」。
 - **验证**：本地与容器 `/auth/me` perm_codes 断言（auditor=['system.audit.view']）；admin 37 码全量可见；只读 op_low 21 码保持原可见集合（其角色带全域 view，属预期）；页面 200。
 - **待办/坑**：① 角色普遍过宽导致过滤差异小——建议按域建角色（网络/系统/机房/安全/审计/桌面），并把 init_nops_data 的宽正则 grants 收紧到目录级；② 菜单授权界面（拖树）未做；③ 直链 URL（如 /system）不受菜单过滤保护——仅影响导航可见性，数据安全仍靠后端 required_perm。
+
+---
+
+## 19. 里程碑 M2026-09-05：导航权限点 menu.* + 角色化演示账号（RBAC 细化）
+
+- **问题**：前端菜单此前按"功能权限码"过滤——ipam/拓扑/NCM/网络总览/设备台账共用 `cmdb.device.view`，导致角色间菜单几乎全同，无法体现 IA 域划分。
+- **方案**：新增一类**导航权限点 `menu.*`（view 级，非功能门禁）**，前端菜单只按导航码过滤；功能码继续由后端 required_perm 拦截。menu.* 共 9 项：home/monitor/net/asset/dcim/workflow/security/log/sysadmin。
+- **角色种子**（init_nops_data，幂等；每次运行重置演示账号密码=角色）：
+  - 新增内置角色：`net_admin` 网络管理员 / `sys_admin` 系统运维 / `dcim_admin` 机房运维 / `auditor` 审计员（升级原演示角色）；
+  - 演示账号（密码均 `NopsTest@2025`）：`net_demo`/`sys_demo`/`dcim_demo`/`auditor`；
+  - 旧角色自动兼容：admin 全量 46 码；net_ops 补 menu.* 前缀（保留原功能码正则）；readonly（op_low 等）经 action=view 自动含全部导航码。
+- **可见菜单差异（实测，sqlite 与容器 PG 一致）**：
+  - net_demo：监控+网络+资产+流程（无日志/审计/系统管理）
+  - sys_demo：监控+资产+流程+日志（**不见网络组**）
+  - dcim_demo：仅 工作台+资产与机房
+  - auditor：仅 工作台+操作审计
+  - admin/op_low：全量
+- **验证**：五账号 `/auth/me` perm_codes 断言；net_demo 直连 network-overview 200（看得见进得去）；页面 200。
+- **待办/坑**：① 导航码与功能码分离属"展示层 RBAC"——直链仍可达无导航权的页面（数据安全由后端兜底，符合 IA 说明）；② 授权界面（角色-菜单拖树）仍远期；③ init 需在新增页面时同步 menu.* 与前端 MENU 常量（单点维护：layout MENU ↔ init menu.* ↔ viewset required_perm 三处对齐）。

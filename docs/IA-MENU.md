@@ -119,6 +119,7 @@
 2. 现状说明：平台角色权限普遍较宽（net_ops 正则放行多域、只读角色带全域 view 码），动态菜单的价值随角色细化而显现；menu 域字段（category=menu）已供授权界面使用。
 3. 远期：菜单树表 + 角色-菜单授权界面（可拖树）——开发顺序建议：① 静态域分组（已做）→ ② /auth/me 权限过滤（已做）→ ③ 授权界面。
 4. 配套：菜单项→权限码映射集中在 `frontend/src/layout.vue` MENU 常量；新增页面时按“该页 viewset 的 required_perm”登记即可自动纳入过滤。
+5. （2026-09-05 细化）菜单过滤改用独立**导航权限点 menu.\***（home/monitor/net/asset/dcim/workflow/security/log/sysadmin，view 级）——解决多个页面共用功能码导致的"角色菜单趋同"；功能码继续由后端 required_perm 拦截。内置演示角色：网络管理员(net_demo)/系统运维(sys_demo)/机房运维(dcim_demo)/审计员(auditor)，密码均 NopsTest@2025；角色-菜单对照见 HANDOVER §19。维护三处对齐：layout.vue MENU ↔ init menu.* ↔ viewset required_perm。
 
 ## 5. 后续开发阶段建议（对应菜单规划位）
 
