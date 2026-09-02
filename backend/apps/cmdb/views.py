@@ -1,5 +1,7 @@
 from urllib.parse import quote
 
+import logging
+
 from django.db import connection
 from django.db.models import Count
 from django.http import HttpResponse
@@ -234,6 +236,13 @@ class DeviceViewSet(BaseModelViewSet):
         if iface_ids:
             from apps.topo.models import LldpNeighbor
             LldpNeighbor.objects.filter(local_interface_id__in=iface_ids).delete()
+        # AlertEvent 以 device_id 裸外键关联；被事件单引用的行保留（防止 ticket 断链语义丢失）
+        from apps.alert.models import AlertEvent
+        with connection.cursor() as cur:
+            cur.execute("SELECT DISTINCT related_alert_event_id FROM change_incidentticket "
+                        "WHERE related_alert_event_id IS NOT NULL")
+            ref_ids = {r[0] for r in cur.fetchall()}
+        AlertEvent.objects.filter(device_id=pk).exclude(pk__in=ref_ids).delete()
         Device.all_objects.filter(pk=pk).delete()  # 全量 SQL 删除（含附件/授权等级联）
         from common.audit import write_audit
         write_audit(request.user, "purge", "Device", pk, after={"name": name},
@@ -535,6 +544,12 @@ class DeviceViewSet(BaseModelViewSet):
                 device_id=dev.pk, event_type="borrow", occurred_at=occurred,
                 operator_id=request.user.id, counterparty=counterparty,
                 detail={"note": note} if note else {})
+            # 占用即静默（alert services）：借出期间不进告警，失败不阻断借出
+            try:
+                from apps.alert import services as alert_services
+                alert_services.occupation_begin(dev.pk, ev.pk, request.user.id, counterparty)
+            except Exception:
+                logging.getLogger("apps.cmdb").exception("occupation silence failed device=%s", dev.pk)
         elif claim == "return":
             if old != Device.UsageStatus.OCCUPIED:
                 return Response({"detail": "设备当前非在借状态，无法归还"}, status=400)
@@ -544,6 +559,11 @@ class DeviceViewSet(BaseModelViewSet):
                 device_id=dev.pk, event_type="return", occurred_at=occurred,
                 operator_id=request.user.id, counterparty=request.data.get("counterparty", ""),
                 detail={"note": note} if note else {})
+            try:
+                from apps.alert import services as alert_services
+                alert_services.occupation_end(dev.pk, request.user.id)
+            except Exception:
+                logging.getLogger("apps.cmdb").exception("occupation silence end failed device=%s", dev.pk)
         else:
             return Response({"detail": "claim must be borrow/return"}, status=400)
         from common.audit import write_audit

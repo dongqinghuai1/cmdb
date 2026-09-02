@@ -58,6 +58,50 @@ def fire_event(rule, device_id, detail=None, title=None):
         raise
 
 
+def fire_event_windowed(rule, device_id, detail=None, title=None):
+    """同键计次 + dedup_window_s 复燃合并（收敛 v1）：
+    - 已有活跃事件 → 计次合并（同 fire_event）；
+    - 无活跃但窗口(rule.dedup_window_s>0)内存在最近 resolved/closed 同键事件 → 复用该行
+      重新触发并计次（不重开新事件、不重复通知），锚点取 resolved_at/updated_at；
+    - 窗口外或无窗口 → 新建事件（走正常通知）。
+    返回 (event, is_new)。"""
+    dedup = f"{device_id}:{rule.id}"
+    now = timezone.now()
+    ev = AlertEvent.objects.filter(
+        dedup_key=dedup, status__in=("firing", "acknowledged", "processing")).first()
+    if ev:
+        AlertEvent.objects.filter(pk=ev.pk).update(
+            fired_count=F("fired_count") + 1, last_fired_at=now)
+        return ev, False
+    window = int(getattr(rule, "dedup_window_s", 0) or 0)
+    if window > 0:
+        recent = (AlertEvent.objects.filter(dedup_key=dedup)
+                  .exclude(status__in=("firing", "acknowledged", "processing"))
+                  .order_by("-id").first())
+        if recent:
+            anchor = recent.resolved_at or recent.updated_at
+            if anchor and (now - anchor).total_seconds() <= window:
+                AlertEvent.objects.filter(pk=recent.pk).update(
+                    status="firing", fired_count=F("fired_count") + 1,
+                    last_fired_at=now, resolved_at=None,
+                    title=(title or recent.title)[:255],
+                    detail=detail if detail is not None else recent.detail)
+                return recent, False
+    try:
+        ev = AlertEvent.objects.create(
+            dedup_key=dedup, rule_id=rule.id, device_id=device_id,
+            severity=rule.severity,
+            title=title or f"[{rule.name}] threshold breach",
+            detail=detail or {})
+        return ev, True
+    except Exception:
+        ev = AlertEvent.objects.filter(
+            dedup_key=dedup, status__in=("firing", "acknowledged", "processing")).first()
+        if ev:
+            return ev, False
+        raise
+
+
 def notify(event, rule):
     """通知带 3 次重试 + 每次写 AlertNotification。"""
     from apps.system.models import NotifyChannel
@@ -106,7 +150,7 @@ def evaluate_alert_rules():
                 if not dev or _is_muted(int(dev), muted):
                     continue
                 if eval_compare(float(item["value"][1]), rule.operator, float(rule.threshold)):
-                    ev, new = fire_event(rule, int(dev))
+                    ev, new = fire_event_windowed(rule, int(dev))
                     if new:
                         notify(ev, rule); fired += 1
 
@@ -117,7 +161,7 @@ def evaluate_alert_rules():
                 for (dev_id,) in cur.fetchall():
                     if _is_muted(dev_id, muted):
                         continue
-                    ev, new = fire_event(rule, dev_id)
+                    ev, new = fire_event_windowed(rule, dev_id)
                     if new:
                         notify(ev, rule); fired += 1
 
@@ -138,7 +182,7 @@ def evaluate_alert_rules():
             for dev_id, sample in hits.items():
                 if _is_muted(dev_id, muted):
                     continue
-                ev, new = fire_event(rule, dev_id, detail={"sample": sample})
+                ev, new = fire_event_windowed(rule, dev_id, detail={"sample": sample})
                 if new:
                     notify(ev, rule); fired += 1
 

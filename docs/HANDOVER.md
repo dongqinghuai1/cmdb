@@ -1,6 +1,6 @@
 # 交接文档（面向下一个开发智能体）
 
-> 最后更新：M2026-09-17（拓扑自动发现 + 线缆/LLDP 比对上线，见文末 §31）。
+> 最后更新：M2026-09-18（告警收敛/静默增强 v1，见文末 §32）。
 > 一期+二期已完成并实测通过；三期「自动化运维」（M2026-09-02）、「轻量事件单」（M2026-09-02b）、「轻量变更单」（M2026-09-02c）、「CMDB 基础补齐 R1/R2/R3」（M2026-09-03/03b/03c）、「资产生命周期」（M2026-09-03d）已上线，见文末里程碑。
 > 读完本文 + DEPLOY.md + DEVELOPMENT.md 即可接手。
 
@@ -37,7 +37,7 @@
 
 ## 3. 待办清单（按 PRD 路线图）
 
-**二期**：syslog 接收+日志检索、NCM 配置备份/diff、拓扑(~~LLDP 自动发现~~ ✅M2026-09-17；G6 手工布局保存待办)、AP 台账同步、告警收敛/静默、IPAM、飞书 SSO、Prometheus remote_write、路由快照采集（~~change_ticket 轻量变更单~~ ✅ 已于三期补齐，见 M2026-09-02c）
+**二期**：syslog 接收+日志检索、NCM 配置备份/diff、拓扑(~~LLDP 自动发现~~ ✅M2026-09-17；G6 手工布局保存待办)、AP 台账同步、告警收敛/静默(~~占用静默+复燃窗口合并~~ ✅M2026-09-18；根因抑制/变更窗口自动静默待)、IPAM、飞书 SSO、Prometheus remote_write、路由快照采集（~~change_ticket 轻量变更单~~ ✅ 已于三期补齐，见 M2026-09-02c）
 **三期**：~~自动化运维~~ ✅、~~轻量事件单~~ ✅、~~轻量变更单(二期欠账)~~ ✅、~~线缆与 LLDP 比对~~ ✅（M2026-09-17）；剩余：安全基线、资产生命周期+保修/借用、报表中心、固件升级/值班、PDU 电源、虚机 vCenter 同步
 **四期**：AI（LLM 网关已留 settings.LLM_*、NL2Query、根因分析、ChatOps 飞书机器人、RAG）
 **技术债**：ai/report 骨架 app 补全；巡检只实现了 2 种检查类型（online 状态/接口错包阈值）；collect_shard 需要真实 SNMP 设备联调；audit_log/log_record/login_event 分区表转换（ER D12）；事件单超时仅时间线提醒（飞书/升级未接）
@@ -76,6 +76,7 @@
 | **verify_cmdb_r3.py** | **CMDB R3：TechSnapshot 越权/参数校验/写入/最新覆盖/tech 透出/占位回落/只读可见** | **7 PASS（sqlite 与容器 PG 各一遍）** |
 | **verify_lifecycle.py** | **资产生命周期：流转留事件/同状态与非法 400/资产事件读写/越权/保修汇总口径与清单(临期±1天容差)** | **12 PASS（sqlite 与容器 PG 各一遍）** |
 | **verify_topo_lldp.py** | **拓扑自动发现+线缆/LLDP 比对：LLDP-MIB 解析纯函数 / mock 发现落邻居+远端回填+构图 / 比对三态(确认·mismatch·自动补录) / 幂等 / 权限负例 / purge 清理孤儿** | **22 PASS（sqlite 与容器 PG 各一遍）** |
+| **verify_alert_converge.py** | **告警收敛/静默增强：借出自动静默+归还释放 / 占用期不触发 / 窗口内复燃合并同一事件(不重开) / 窗口0复燃新建事件 / 手动评估与 resolve 时间戳 / 权限负例 / purge 清事件孤儿(保留被事件单引用)** | **18 PASS（sqlite 与容器 PG 各一遍）** |
 | smoke_test.py | 端口级冒烟（登录->建柜->上架->冲突） | 10 PASS |
 | seed_demo.py | 演示数据：2 地区/2 机房/3 机柜/10 设备 | 幂等 |
 | seed_floorplan.py | 上海机房平面图示例布局 | 幂等 |
@@ -468,3 +469,14 @@
 - **配套修复**：设备 purge（`/cmdb/devices/{id}/purge/`）先清理跨域裸外键残留 topo_lldpneighbor（防孤儿堆积）；规避 GenericIPAddressField 上 `.exclude(manage_ip=None).exclude(manage_ip="")` 连用的 Django 组合矛盾（空串被 IPField 预置为 None，两条件叠加恒空——删空串条件）。
 - **验证**：`scripts/verify_topo_lldp.py` **22 PASS ×2**（sqlite/容器 PG）：P 组 LLDP-MIB 解析纯函数（本地不触网）；S 组 mock 全链路——造 A/B+凭据+接口 → 发现落邻居+远端回填 ≥4 → graph 出 A-B 自动边 → 手工线缆 pair1 确认/pair3 mismatch/未录 pair2 自动补录 source=lldp → 重复比对幂等(不新增) → net_demo(有读无写) 403 双负例 → purge 后无孤儿邻居。回归：api_test 33、verify_snmp 8、verify_prom 10 均保持（sqlite+PG）。
 - **待办/坑**：① 真实 LLDP 走查依赖设备已绑 snmp_v2c 凭据且开启 LLDP（测试用 mock）；生产若走 Prometheus/snmp_exporter 拉 LLDP（需 exporter 配置该表+标签），本链路不冲突但需查询映射模板（见 M30 待办①）；② 比对的口径是接口名精确匹配（if_name 规范对齐，M28 同坑）；③ TopologyNode 布局坐标保存（G6 手工布局）仍无 API——拓扑"自动+手工修正"的另一半待办；④ 根因抑制（告警 suppressed_by_id 依赖拓扑父设备 down 判断）已具备数据源，见告警收敛待办。
+
+---
+
+## 32. 里程碑 M2026-09-18：告警收敛/静默增强 v1（占用静默 + 复燃窗口合并）
+
+- **范围**：把 ER D4「占用即静默」与规则 `dedup_window_s` 从"空置字段"变成生效语义；对接既有 alert 引擎/评估链，不新增采集器。根因抑制（拓扑父设备 down 压制下游）与变更窗口自动静默留待后续（数据源已在：topo_lldpneighbor.remote_device_id / change 计划时间窗）。
+- **占用(借出)自动静默** `apps/alert/services.py`（新，轻量无 celery 依赖，跨 app 联动统一走 services）：`occupation_begin/end` 幂等管理 `AlertSilence(silence_type='occupation', scope={'device_ids':[..]}, device_usage_id=<资产事件id>)`。`cmdb usage-claim` borrow 成功后自动建静默、return 自动结束（失败仅记日志不阻断借还——借还台账是主链路）。`AlertSilenceViewSet` 补 `silence_type` 过滤；列表/结束/权限沿用既有（alert.rule.edit）。
+- **复燃窗口合并（收敛）** `apps/alert/engine.py::fire_event_windowed`：活跃同键 → 计次合并；无活跃但 **resolved/closed 且窗口内**（锚点 resolved_at/updated_at，`rule.dedup_window_s>0`）复燃 → 复用同一行重新触发+计次，**不重开新事件、不重复通知**（flapping 收敛）；窗口外/窗口 0 → 新建事件照常通知。`evaluate_alert_rules` 三分支（metric/offline/log）全部切到窗口化版本；`fire_event` 保留给 webhook 等既有调用方。手动入口 `POST /alerts/rules/evaluate/`（同步执行 + alert.rule.edit 门禁 + 审计，运维/测试不再依赖 docker exec）。
+- **配套**：事件 `resolve` 动作补写 `resolved_at`（此前只改状态——窗口合并锚点依赖它）；设备 purge 扩展清理 **AlertEvent 裸外键孤儿**（`device_id` 无 FK），被事件单(`change_incidentticket.related_alert_event_id`)引用的行保留防断链——与上轮 topo_lldpneighbor 清理同规则。
+- **验证**：`scripts/verify_alert_converge.py` **18 PASS ×2**（sqlite/容器 PG）：借出自动建 occupation 静默 → 占用期评估不触发 → 只读账号 evaluate/borrow 双 403 → 归还自动结束静默并恢复触发 → 窗口 3600 规则 resolve 后复燃合并**同一行**（firing 恒 1 条、count≥2）→ 窗口 0 规则复燃**新建**事件（旧 resolved+新 firing）→ purge 后事件孤儿清零。回归：verify_silence_ap 7、api_test 33（PG）保持。
+- **待办/坑**：① 根因抑制 v1：拓扑父设备 down → 对 `AlertSilence(scope 含父设备下游 device_ids/根因事件 suppressed_by_id)` 的自动建/清，接 M31 的 topo 数据源实现；② 变更窗口静默：change ticket 审批通过→按受影响设备+计划窗口自动建 maintenance 静默、变更结束自动关；③ occupation 静默的 UI 透出（设备页显示"占用静默中"）与告警收敛报表待做；④ webhook 路径去重语义独立（alertname+instance），暂不套 dedup_window（按需演进）。

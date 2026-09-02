@@ -36,6 +36,21 @@ class AlertRuleViewSet(viewsets.ModelViewSet):
     required_perm = "alert.rule.view"
     filterset_fields = ["rule_type", "enabled", "severity"]
 
+    @action(detail=False, methods=["post"], url_path="evaluate")
+    def evaluate(self, request):
+        """手动触发一轮规则评估（告警引擎入口，供运维/测试用，同步执行）。"""
+        from common.audit import write_audit
+        from common.permissions import has_perm
+        from rest_framework.exceptions import PermissionDenied
+        from apps.alert.engine import evaluate_alert_rules
+        if not (request.user.is_superuser or has_perm(request.user, "alert.rule.edit")):
+            raise PermissionDenied("无告警规则管理权限，无法触发评估")
+        r = evaluate_alert_rules()
+        write_audit(request.user, "execute", "AlertRule", "evaluate",
+                    after={**r, "action": "evaluate"},
+                    source_ip=request.META.get("REMOTE_ADDR", ""))
+        return Response(r)
+
 
 class AlertSilenceViewSet(viewsets.ModelViewSet):
     """静默/维护窗口：scope={"device_ids":[..]} 或 {"all":true}；ended_at 空则到期自动失效。"""
@@ -43,6 +58,7 @@ class AlertSilenceViewSet(viewsets.ModelViewSet):
     serializer_class = AlertSilenceSerializer
     permission_classes = [RbacPermission]
     required_perm = "alert.rule.edit"
+    filterset_fields = ["silence_type"]
 
     @action(detail=True, methods=["post"])
     def end(self, request, pk=None):
@@ -77,9 +93,11 @@ class AlertEventViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def resolve(self, request, pk=None):
+        from django.utils import timezone
         ev = self.get_object()
         ev.status = "resolved"
-        ev.save(update_fields=["status"])
+        ev.resolved_at = timezone.now()
+        ev.save(update_fields=["status", "resolved_at", "updated_at"])
         return Response(AlertEventSerializer(ev).data)
 
     @action(detail=True, methods=["post"], url_path="create-incident")
