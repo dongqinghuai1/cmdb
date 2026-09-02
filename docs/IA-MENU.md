@@ -115,10 +115,10 @@
 
 ## 4. 动态菜单路线（RBAC 按角色渲染）
 
-1. 现状：侧栏静态全量；后端 perm 已带 menu 域（dcim/cmdb/monitor/…），前端未消费。
-2. 中期：`/auth/me` 返回用户 perm codes → layout 按「菜单项 ↔ 所需 perm 码」映射表过滤（只读角色自然只见 view 项）。
-3. 远期：菜单树表 + 角色-菜单授权界面（可拖树），每个域分组按登录角色显示/隐藏。
-   开发顺序建议：① 先按 §3 静态分组（本次已做）→ ② /auth/me 过滤 → ③ 授权界面。
+1. ✅ 2026-09-04 已落地：`/auth/me` 返回 `perm_codes`（common.permissions.user_perm_codes），layout 按「菜单项 ↔ 门禁权限码（any-of，支持 `dcim.*` 前缀）”过滤，空权限兜底全显（后端接口仍按 RbacPermission 拦截）。演示账号 `auditor/NopsTest@2025`（角色“审计员”，仅 system.audit.view）登录只见 工作台 + 操作审计。
+2. 现状说明：平台角色权限普遍较宽（net_ops 正则放行多域、只读角色带全域 view 码），动态菜单的价值随角色细化而显现；menu 域字段（category=menu）已供授权界面使用。
+3. 远期：菜单树表 + 角色-菜单授权界面（可拖树）——开发顺序建议：① 静态域分组（已做）→ ② /auth/me 权限过滤（已做）→ ③ 授权界面。
+4. 配套：菜单项→权限码映射集中在 `frontend/src/layout.vue` MENU 常量；新增页面时按“该页 viewset 的 required_perm”登记即可自动纳入过滤。
 
 ## 5. 后续开发阶段建议（对应菜单规划位）
 

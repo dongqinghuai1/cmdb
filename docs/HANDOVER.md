@@ -284,3 +284,19 @@
 - **前端**：`frontend/src/pages/Network.vue`（路由 `/network`，菜单 网络→网络总览）：顶部 4 统计卡 + 邻居表（状态标签、click 进 360）+ 路由快照表（新鲜度/过期警告）+ 链路状态表（下行/高错包、错包率、光功率收/发）+ AP 表 + 扩展采集位说明；全空态文案指引采集入口。
 - **验证**：`scripts/verify_cmdb_net.py` 11 PASS ×2（sqlite op_low / 容器 PG viewer_pg）：分区齐全、行字段结构、链路 summary 口径、扩展位 4 项、区域过滤（不存在区域→覆盖 0 仍 200）、只读可读；`/network` 页面 200。
 - **设计点（可迁移性）**：新增采集品类只往 `extensions`/新分区追加字段，前端按 key 渲染；`region_id/site_id` 为统一租户级过滤入口，后续跨区域报表可复用。
+
+---
+
+## 18. 里程碑 M2026-09-04c：RBAC 动态菜单（IA 路线第 3 步收口）
+
+- **目标**：登录用户只看到自己有权限的菜单域/页面，替代静态全量侧栏。
+- **后端**：`/auth/me` 已带 `perm_codes`（common.permissions.user_perm_codes，超管返回全量 37 项）；本轮零后端改动。
+- **前端**（`frontend/src/layout.vue` 重构为配置驱动）：
+  - `MENU` 常量登记「菜单项 ↔ 门禁权限码」（any-of；`dcim.*`/前缀匹配 `.view`；工作台恒显；空权限兜底全显——接口仍受 RbacPermission 保护）；
+  - 分组在其子项全部无权时整组隐藏；菜单按 `/auth/me` 后异步渲染；
+  - 「系统管理」由通配 system.* 收紧为显式列表（user/role/permission/dept/config/credential/notify/apitoken 的 view），避免审计码误放行；
+  - 移除占位规划项（规划见 IA-MENU，避免噪音）。
+- **权限码口径来自各 viewset 的 required_perm**：ipam/topo/ncm/network/devices 等共用 cmdb.device.view；告警 alert.rule/event；事件单 change.incident；巡检 inspect；自动化 automate.script/run；变更 change.ticket；审计 system.audit；日志 monitor.log；dcim 按 dcim.*。
+- **演示账号**：新增角色“审计员”+用户 `auditor/NopsTest@2025`（仅 system.audit.view）——sqlite 与容器 PG 均已种入，登录后菜单仅「工作台 + 操作审计」。
+- **验证**：本地与容器 `/auth/me` perm_codes 断言（auditor=['system.audit.view']）；admin 37 码全量可见；只读 op_low 21 码保持原可见集合（其角色带全域 view，属预期）；页面 200。
+- **待办/坑**：① 角色普遍过宽导致过滤差异小——建议按域建角色（网络/系统/机房/安全/审计/桌面），并把 init_nops_data 的宽正则 grants 收紧到目录级；② 菜单授权界面（拖树）未做；③ 直链 URL（如 /system）不受菜单过滤保护——仅影响导航可见性，数据安全仍靠后端 required_perm。
