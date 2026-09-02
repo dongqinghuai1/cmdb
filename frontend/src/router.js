@@ -20,6 +20,7 @@ const routes = [
       { path: "devices/:id", component: () => import("./pages/Device360.vue"), meta: { title: "设备 360°" } },
       { path: "alerts", component: () => import("./pages/Alerts.vue"), meta: { title: "告警中心" } },
       { path: "incidents", component: () => import("./pages/Incidents.vue"), meta: { title: "事件单" } },
+      { path: "audit", component: () => import("./pages/Audit.vue"), meta: { title: "操作审计" } },
       { path: "inspects", component: () => import("./pages/Inspects.vue"), meta: { title: "巡检中心" } },
       { path: "system", component: () => import("./pages/System.vue"), meta: { title: "系统管理" } },
     ],

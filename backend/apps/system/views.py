@@ -2,6 +2,8 @@
 import hashlib
 import secrets
 
+import django_filters
+
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from rest_framework import status, viewsets
@@ -149,12 +151,22 @@ class NotifyChannelViewSet(BaseModelViewSet):
         return Response({"ok": ok})
 
 
+class AuditLogFilter(django_filters.FilterSet):
+    """审计日志检索：动作/对象类型/操作人/来源IP 等值 + created_at 区间(created_at_after/before)。"""
+    created_at = django_filters.DateFromToRangeFilter()
+
+    class Meta:
+        model = AuditLog
+        fields = ["action", "resource_type", "user", "source_ip"]
+
+
 class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = AuditLog.objects.select_related("user").order_by("-id")
     serializer_class = AuditLogSerializer
     permission_classes = [RbacPermission]
     required_perm = "system.audit.view"
-    filterset_fields = ["action", "resource_type", "user"]
+    filterset_class = AuditLogFilter
+    search_fields = ["resource_type", "resource_id", "source_ip"]
 
 
 class SystemConfigViewSet(BaseModelViewSet):

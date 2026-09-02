@@ -262,3 +262,13 @@
 - **落地**：`frontend/src/layout.vue` 改为域分组二级菜单——总览；监控与告警（告警/事件单/巡检）；网络（IPAM/拓扑/NCM）；资产与机房（设备台账/设备运营/机房管理）；流程与自动化（自动化/变更）；安全与合规（规划位占位）；日志中心；系统管理。规划位一律 disabled 占位，避免空页假入口。
 - 无后端改动；`npm run build` 通过；web 容器重建后生效。
 - **后续**：动态菜单 = /auth/me perms → layout 过滤（先按菜单项-权限码映射，后授权树界面），对应 docs/IA-MENU.md §4。
+
+---
+
+## 16. 里程碑 M2026-09-04a：操作审计独立页（安全与合规分组首个真入口）
+
+- **背景**：审计日志此前仅藏在系统管理 Tab（列表无 diff）；菜单 IA（§15）把「安全与合规」设为审计员分组。
+- **后端**（apps/system/views.py）：AuditLogViewSet 增 `AuditLogFilter`（django_filters）：action/resource_type/user/source_ip 等值 + `created_at_after/before` 日期区间；`search_fields` 支持 resource_type/resource_id/source_ip 模糊。
+- **前端**：新页 `frontend/src/pages/Audit.vue`（路由 `/audit`，菜单 安全与合规→操作审计）：动作筛选 + 关键字 + 日期区间；行内"变更摘要"（create/delete/execute/字段数+字段名）；点击行弹详情：对象/人/IP/时间 + **变更前后 diff 表**（before 红 / after 绿，字段级，嵌套 JSON 展示）。审计数据只读。
+- **验证**：sqlite 263 条 / PG 541 条审计均真实可查：list/action+resource_type 过滤/search=Device/日期区间/未来空区间全 200；`/audit` 页面 200。
+- **待办**：登录审计视图（usage LoginEvent 已建表未做 UI）、按用户/操作人下拉过滤、审计导出 CSV（阶段 2）。

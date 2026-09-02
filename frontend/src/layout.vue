@@ -38,7 +38,7 @@
 
         <el-sub-menu index="g-sec">
           <template #title><el-icon><Lock /></el-icon><span>安全与合规 · 安全/审计员</span></template>
-          <el-menu-item disabled class="plan">⌛ 操作审计独立页（规划，暂在系统管理）</el-menu-item>
+          <el-menu-item index="/audit">操作审计（全站留痕+diff）</el-menu-item>
           <el-menu-item disabled class="plan">⌛ 登录审计视图（LoginEvent，规划）</el-menu-item>
           <el-menu-item disabled class="plan">⌛ 安全基线 / 漏洞 / 批量修复（规划）</el-menu-item>
         </el-sub-menu>
