@@ -1,6 +1,7 @@
 """apps.cmdb -- dynamic model / device inventory / interfaces (ER 4.2)."""
 from django.contrib.auth.models import User
 from django.db import models
+from django.utils import timezone
 
 from common.crypto import EncryptedTextField
 from common.models import SoftDeleteModel, TimeStampedModel
@@ -277,3 +278,24 @@ class DeviceBusiness(TimeStampedModel):
 
     class Meta:
         unique_together = ("business", "device")
+
+
+class LinkQualitySample(models.Model):
+    """链路质量时间序列（周期任务 cmdb.sample_link_quality 每 5 分钟取样一次）。"""
+
+    device_id = models.BigIntegerField(db_index=True)        # 跨 app 裸外键（cmdb.device）
+    interface_id = models.BigIntegerField(db_index=True)     # cmdb.device_interface
+    iface_name = models.CharField(max_length=64, blank=True)
+    sampled_at = models.DateTimeField(default=timezone.now, db_index=True)
+    in_bps = models.BigIntegerField(default=0)
+    out_bps = models.BigIntegerField(default=0)
+    in_pps = models.BigIntegerField(default=0)
+    out_pps = models.BigIntegerField(default=0)
+    in_errors_rate = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+    out_errors_rate = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+    optical_tx_dbm = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    optical_rx_dbm = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+
+    class Meta:
+        ordering = ["-sampled_at"]
+        indexes = [models.Index(fields=["device_id", "sampled_at"], name="lqs_dev_samp")]

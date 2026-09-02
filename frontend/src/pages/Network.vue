@@ -64,7 +64,12 @@
 
       <el-col :span="10">
         <el-card shadow="never">
-          <template #header><b>链路状态（下行 / 高错包，含光功率）</b></template>
+          <template #header>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <b>链路状态（下行 / 高错包，含光功率）</b>
+              <el-button size="small" type="primary" plain @click="openQ">质量趋势</el-button>
+            </div>
+          </template>
           <el-table :data="L.rows" size="small" max-height="330" @row-click="openDev">
             <el-table-column prop="name" label="设备" width="96" />
             <el-table-column prop="if_name" label="接口" width="86" />
@@ -108,6 +113,23 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <el-drawer v-model="qDlg" title="链路质量趋势（近 24h 采样 / 36 桶降采样）" size="640px">
+      <el-empty v-if="!qIfs.length" description="暂无链路质量采样——等 beat 每 5 分钟取样几次后即有数据"
+                :image-size="60" />
+      <div v-for="q in qIfs" :key="q.interface_id" class="qrow">
+        <div class="qhead">
+          <b>{{ q.device }} · {{ q.iface }}</b>
+          <span class="qmeta">样本 {{ q.samples }} ｜ 均值 ↓{{ bps(q.avg_in) }} ↑{{ bps(q.avg_out) }}
+            ｜ 峰值 ↓{{ bps(q.peak_in) }} ｜ 错包峰值 {{ q.peak_err }}</span>
+        </div>
+        <div class="spark">
+          <div v-for="(b, i) in q.buckets" :key="i" class="bar"
+               :style="{ height: barH(b.in, q.peak_in) + 'px' }"
+               :title="tt(b)" />
+        </div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -137,6 +159,26 @@ const EXT = computed(() => data.value?.extensions || []);
 
 const fmt2 = (s) => (s || "").replace("T", " ").slice(0, 19);
 const openDev = (row) => { if (row.device_id) router.push("/devices/" + row.device_id); };
+const qDlg = ref(false);
+const qIfs = ref([]);
+const openQ = async () => {
+  qDlg.value = true;
+  const r = await api.get("/cmdb/devices/link-quality-overview/", { params: { hours: 24 } });
+  qIfs.value = r.interfaces || [];
+};
+const bps = (v) => {
+  if (v === undefined || v === null) return "-";
+  if (v >= 1e9) return (v / 1e9).toFixed(2) + "G";
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + "M";
+  if (v >= 1e3) return (v / 1e3).toFixed(0) + "K";
+  return v + "b";
+};
+const barH = (v, peak) => Math.max(2, Math.round((v / (peak || 1)) * 38));
+const tt = (b) => {
+  const d = new Date(b.ts * 1000);
+  const hh = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  return hh + "  ↓" + bps(b.in) + "/s  ↑" + bps(b.out) + "/s  错包" + b.err;
+};
 onMounted(async () => { data.value = await api.get("/cmdb/devices/network-overview/"); });
 </script>
 
@@ -146,5 +188,11 @@ onMounted(async () => { data.value = await api.get("/cmdb/devices/network-overvi
 .stat .l { color: #909399; font-size: 12px; margin-top: 2px; }
 .empty { color: #909399; font-size: 12px; padding: 10px 0; }
 .extrow { display: flex; gap: 8px; align-items: baseline; font-size: 13px; margin-bottom: 7px; }
+.qrow { border: 1px solid #ebeef5; border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
+.qhead { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+         font-size: 13px; margin-bottom: 6px; }
+.qmeta { color: #909399; font-size: 12px; }
+.spark { display: flex; align-items: flex-end; gap: 2px; height: 42px; }
+.spark .bar { flex: 1; min-width: 4px; background: #409eff; border-radius: 1px; }
 :deep(.el-table__row) { cursor: pointer; }
 </style>

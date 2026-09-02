@@ -12,7 +12,7 @@ from rest_framework.response import Response
 from apps.cmdb import storage
 from apps.cmdb.models import (Business, CiModel, CiModelAttr, Device, DeviceAssetEvent,
                               DeviceAttachment, DeviceBusiness, DeviceGroup, License,
-                              TechSnapshot)
+                              LinkQualitySample, TechSnapshot)
 from apps.cmdb.serializers import (CiModelAttrSerializer, CiModelSerializer,
                                    DeviceGroupSerializer, DeviceSerializer,
                                    DeviceInterfaceSerializer, BusinessSerializer)
@@ -790,6 +790,67 @@ class DeviceViewSet(BaseModelViewSet):
             "os": q(qs.exclude(sw_version="").values("sw_version")),
             "usage": q(qs.exclude(usage_tag="").values("usage_tag")),
         })
+
+    # ---------- 链路质量时间序列（LinkQualitySample） ----------
+    @action(detail=False, methods=["get"], url_path="link-quality-overview")
+    def link_quality_overview(self, request):
+        """近 N 小时链路质量：按接口聚合并降采样 36 桶（网络级，无需前端设备 id）。"""
+        from datetime import timedelta as _td
+        hours = int(request.query_params.get("hours", 24))
+        since = timezone.now() - _td(hours=hours)
+        rows = list(LinkQualitySample.objects.filter(sampled_at__gte=since)
+                    .order_by("sampled_at")[:6000])
+        if not rows:
+            return Response({"hours": hours, "generated": timezone.now(), "interfaces": []})
+        devn = {d.id: d.name for d in Device.objects.filter(
+            id__in={r.device_id for r in rows})}
+        grouped = {}
+        for r in rows:
+            g = grouped.setdefault(r.interface_id, {"device_id": r.device_id,
+                                                    "iface": r.iface_name, "pts": []})
+            g["pts"].append((r.sampled_at.timestamp(), float(r.in_bps or 0),
+                             float(r.out_bps or 0), float(r.in_errors_rate or 0)))
+        out = []
+        for iid, g in grouped.items():
+            pts = g["pts"]
+            t0, t1, NB = pts[0][0], pts[-1][0], 36
+            span = max(t1 - t0, 1)
+            buckets = []
+            for bi in range(NB):
+                lo = t0 + span * bi / NB
+                hi = t0 + span * (bi + 1) / NB
+                sel = [p for p in pts if lo <= p[0] < hi or (bi == NB - 1 and p[0] <= hi)]
+                if not sel:
+                    continue
+                buckets.append({"ts": int((lo + hi) / 2),
+                                "in": round(sum(p[1] for p in sel) / len(sel)),
+                                "out": round(sum(p[2] for p in sel) / len(sel)),
+                                "err": round(max(p[3] for p in sel), 2)})
+            ins, outs = [p[1] for p in pts], [p[2] for p in pts]
+            out.append({
+                "interface_id": iid, "device_id": g["device_id"],
+                "device": devn.get(g["device_id"], ""), "iface": g["iface"],
+                "samples": len(pts),
+                "avg_in": int(sum(ins) / len(ins)), "peak_in": int(max(ins)),
+                "avg_out": int(sum(outs) / len(outs)), "peak_out": int(max(outs)),
+                "peak_err": max(p[3] for p in pts), "buckets": buckets})
+        out.sort(key=lambda x: (x["device"], x["iface"]))
+        return Response({"hours": hours, "generated": timezone.now(), "interfaces": out})
+
+    @action(detail=False, methods=["post"], url_path="link-quality-sample")
+    def link_quality_sample(self, request):
+        """按需取样（execute 权限）：等价 beat 任务 cmdb.sample_link_quality 单次执行。"""
+        _need_execute(request.user)
+        from apps.cmdb.linkquality import sample_link_quality
+        try:
+            r = sample_link_quality(request.data.get("keep_days") or 7)
+        except (TypeError, ValueError):
+            return Response({"detail": "keep_days must be int"}, status=400)
+        from common.audit import write_audit
+        write_audit(request.user, "execute", "LinkQualitySample", None,
+                    after={**r, "action": "link-quality-sample"},
+                    source_ip=request.META.get("REMOTE_ADDR", ""))
+        return Response(r)
 
 
 class DeviceGroupViewSet(BaseModelViewSet):

@@ -395,3 +395,15 @@
 - **前端**：Audit.vue 顶部新增概览条——24h 总量 Tag + 近 7 日标签、动作/对象/操作人 TOP 小标签组、「导出当前筛选（CSV）」按钮（客户端 BOM CSV，最多 2000 行）。
 - **验证**：`scripts/verify_audit.py` 6 PASS ×2（sqlite auditor / 容器 PG auditor）：auditor（仅 system.audit.view）可看 summary 与导出 CSV（表头/非空）、hours 生效、列表最新可读。
 - **待办/坑**：① export 用 csv 模块直接流式写 resp（审计表字段无转义隐患），但筛选参数沿用 filterset 需与页面参数一致（created_at_after/before、search）；② 导出上限 5000（如需要全量导出需加分页参数）；③ by_user 无姓名前缀区分（用户名即人名体系内约定）。
+
+---
+
+## 26. 里程碑 M2026-09-12：链路质量时间序列（IA 网络管理员·链路质量）
+
+- **范围**：链路质量从"当前快照"升级为时间序列——周期取样落库 → 聚合/降采样 → 趋势图；历史可审计、可回溯故障时段。
+- **模型**：`apps.cmdb.LinkQualitySample`（迁移 cmdb.0004）——device_id/interface_id(裸外键)/iface_name 快照、sampled_at(索引)+ (device,sampled_at) 复合索引、in/out bps/pps、错误率、光功率收发。注意 Django 6 已移除 Meta `index_together` → 用 `indexes`（本轮踩坑）。
+- **取样**：`apps/cmdb/linkquality.py::sample_link_quality(keep_days=7)`（函数内惰性导入模型）——读全部 DeviceInterfaceStat → bulk_create 快照 → 同轮删除 keep_days 前旧样本；celery 任务 `cmdb.sample_link_quality` 注册（worker 日志确认），beat 每 5 分钟；另有按需 POST 动作 `link-quality-sample`（execute + audit）。
+- **概览 API**：`GET /cmdb/devices/link-quality-overview/?hours=n`（网络级聚合，前端无需设备 id）——按接口聚合并**降采样 36 桶**，输出 device/iface、样本数、均值/峰值、错包峰值、buckets[{ts,in,out,err}]。
+- **前端**：Network 链路卡头部「质量趋势」按钮 → Drawer：每接口一行（设备·接口 + 样本/均值/峰值/错包元信息 + 36 桶下行带宽迷你柱状图，tooltip 含时间/上下行/错包）。
+- **验证**：`scripts/verify_linkq.py` 7 PASS ×2（sqlite/容器 PG）：只读取样 403、取样执行计数、非法 keep_days 400、概览结构、桶单调且 ≤36、均值≤峰值（无统计源时优雅跳过）、只读可看、清理 keep_days=0。worker 日志确认任务注册。
+- **待办/坑**：① 演示库当前无 DeviceInterfaceStat 源数据 → 无真实曲线（driver/采集写入 stat 后自动有）；② 每分钟 5 取样量级可控，若海量接口需按接口去重/分层采样；③ 概览 6000 行截断+36 桶为简化版，长周期(周/月)需落到小时/天聚合表。④ 前端为迷你柱状图（无图表库依赖），宽幅趋势另需引入 echarts。

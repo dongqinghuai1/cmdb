@@ -48,4 +48,6 @@ app.conf.beat_schedule = {
     # CMDB 技术快照保留（按 设备×品类 只留最近 N 条）
     "cmdb-techsnapshot-retention": {"task": "cmdb.cleanup_techsnapshots",
                                     "schedule": crontab(hour=4, minute=30)},
+    # 链路质量取样（5 分钟一次 → LinkQualitySample）
+    "cmdb-link-quality-sample": {"task": "cmdb.sample_link_quality", "schedule": 300.0},
 }
