@@ -21,6 +21,8 @@ class Command(BaseCommand):
             ("system.audit.view", "审计查看", "系统管理", "view"),
             ("system.config.view", "参数配置", "系统管理", "view"),
             ("system.token.view", "API Token", "系统管理", "view"),
+            ("system.duty.view", "值班排班查看", "系统管理", "view"),
+            ("system.duty.edit", "值班排班编辑", "系统管理", "edit"),
             ("dcim.region.view", "机房查看", "机房管理", "view"),
             ("dcim.rack.view", "机柜查看", "机房管理", "view"),
             ("dcim.rack.edit", "机柜编辑", "机房管理", "edit"),
@@ -89,6 +91,7 @@ class Command(BaseCommand):
             "cmdb.device.view", "cmdb.model.view", "monitor.collector.view", "monitor.log.view",
             "alert.event.view", "alert.rule.view", "inspect.template.view", "inspect.run.view",
             "automate.script.view", "automate.run.view", "change.incident.view",
+            "system.duty.view", "system.duty.edit",
         ], ["menu.home", "menu.monitor", "menu.asset", "menu.dcim", "menu.workflow", "menu.log"])
         _persona("dcim_admin", "机房运维", [
             "cmdb.device.view", "cmdb.device.edit", "cmdb.device.execute",

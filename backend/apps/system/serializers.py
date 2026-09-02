@@ -1,8 +1,8 @@
 from rest_framework import serializers
 
-from apps.system.models import (ApiToken, AuditLog, Credential, NotifyChannel,
-                                OrgDept, Permission, Role, RoleDataScope,
-                                SystemConfig, UserProfile)
+from apps.system.models import (ApiToken, AuditLog, Credential, DutySchedule,
+                                NotifyChannel, OrgDept, Permission, Role,
+                                RoleDataScope, SystemConfig, UserProfile)
 
 
 class LoginSerializer(serializers.Serializer):
@@ -89,3 +89,22 @@ class ApiTokenSerializer(serializers.ModelSerializer):
         model = ApiToken
         fields = ["id", "name", "token_hash", "scopes", "is_readonly",
                   "rate_limit_per_min", "expires_at", "revoked_at", "plain_token"]
+
+
+class DutyScheduleSerializer(serializers.ModelSerializer):
+    """值班排班（ER V1.1#23）：user/region 传 id，读侧附 user_name/region_name。"""
+    user_name = serializers.SerializerMethodField()
+    region_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DutySchedule
+        fields = ["id", "shift", "user", "user_name", "duty_date", "region",
+                  "region_name", "handover_note", "handed_off_at",
+                  "created_at", "updated_at"]
+        read_only_fields = ["created_at", "updated_at"]
+
+    def get_user_name(self, o):
+        return getattr(o.user, "username", "") or ""
+
+    def get_region_name(self, o):
+        return getattr(o.region, "name", None)

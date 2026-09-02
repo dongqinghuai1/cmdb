@@ -14,6 +14,7 @@ router.register("notify-channels", views.NotifyChannelViewSet)
 router.register("audit-logs", views.AuditLogViewSet)
 router.register("configs", views.SystemConfigViewSet)
 router.register("api-tokens", views.ApiTokenViewSet)
+router.register("duty-schedules", views.DutyScheduleViewSet)
 
 urlpatterns = [
     path("dashboard/summary/", DashboardSummaryView.as_view(), name="dashboard-summary"),

@@ -12,11 +12,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from apps.system.models import (ApiToken, AuditLog, Credential, NotifyChannel,
-                                OrgDept, Permission, Role, RoleDataScope,
-                                SystemConfig)
+from apps.system.models import (ApiToken, AuditLog, Credential, DutySchedule,
+                                NotifyChannel, OrgDept, Permission, Role,
+                                RoleDataScope, SystemConfig)
 from apps.system.serializers import (ApiTokenSerializer, AuditLogSerializer,
-                                     CredentialSerializer, NotifyChannelSerializer,
+                                     CredentialSerializer, DutyScheduleSerializer,
+                                     NotifyChannelSerializer,
                                      OrgDeptSerializer, PermissionSerializer,
                                      RoleDataScopeSerializer, RoleSerializer,
                                      SystemConfigSerializer, UserSerializer)
@@ -233,3 +234,82 @@ class ApiTokenViewSet(BaseModelViewSet):
         obj = ser.save(token_hash=hashlib.sha256(plain.encode()).hexdigest(),
                        created_by=request.user, plain_token=plain)
         return Response(ApiTokenSerializer(obj).data, status=201)
+
+
+class DutyScheduleViewSet(BaseModelViewSet):
+    """值班排班（ER V1.1#23）：主班/备班按天排人；同人同日同班次唯一(DB+校验)。
+    读需 system.duty.view；写（排班/交班/删除）另需 system.duty.edit。"""
+    queryset = DutySchedule.objects.select_related("user", "region").order_by("duty_date", "shift")
+    serializer_class = DutyScheduleSerializer
+    required_perm = "system.duty.view"
+    filterset_fields = ["duty_date", "shift"]
+
+    def _need_edit(self, request):
+        from common.permissions import has_perm
+        from rest_framework.exceptions import PermissionDenied
+        if not (request.user.is_superuser or has_perm(request.user, "system.duty.edit")):
+            raise PermissionDenied("无值班排班管理权限(system.duty.edit)")
+
+    def perform_create(self, serializer):
+        self._need_edit(self.request)
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        self._need_edit(self.request)
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        self._need_edit(self.request)
+        super().perform_destroy(instance)
+
+    @action(detail=False, methods=["get"], url_path="calendar")
+    def calendar(self, request):
+        """值班日历：?month=YYYY-MM（默认当月）。返回 {month, days:[{date, primary, backup}]}，
+        primary/backup={id,user_id,user_name,region,region_name,handover_note,handed_off_at}|None；
+        同人同日重复班次(备份挡主班)按 created_at 最新优先展示，row 留全量。"""
+        import calendar as _cal
+        from datetime import date, datetime
+        month = (request.query_params.get("month") or datetime.now().strftime("%Y-%m"))
+        try:
+            y, m = (int(x) for x in month.split("-"))
+            first = date(y, m, 1)
+        except Exception:
+            return Response({"detail": "month must be YYYY-MM"}, status=400)
+        last_day = _cal.monthrange(y, m)[1]
+        start, end = first, date(y, m, last_day)
+        rows = list(DutySchedule.objects.filter(duty_date__range=(start, end))
+                    .select_related("user", "region").order_by("-created_at"))
+        days = {}
+        for d in range(1, last_day + 1):
+            days[d] = {"date": date(y, m, d).isoformat(), "primary": None, "backup": None,
+                       "all": []}
+        for r in rows:
+            slot = days.get(r.duty_date.day, {}).get("all")
+            if slot is None:
+                continue
+            slot.append({
+                "id": r.id, "user_id": r.user_id,
+                "user_name": getattr(r.user, "username", "") or "",
+                "region": r.region_id, "region_name": getattr(r.region, "name", None),
+                "handover_note": r.handover_note, "handed_off_at": r.handed_off_at})
+            if days[r.duty_date.day][r.shift] is None:
+                days[r.duty_date.day][r.shift] = slot[-1]
+        return Response({"month": f"{y:04d}-{m:02d}", "days": list(days.values())})
+
+    @action(detail=True, methods=["post"], url_path="handoff")
+    def handoff(self, request, pk=None):
+        """交班确认：置 handed_off_at=now + 交班备注（写需 system.duty.edit）。"""
+        from django.utils import timezone
+        self._need_edit(request)
+        obj = self.get_object()
+        note = (request.data.get("note") if request.data else None)
+        obj.handed_off_at = timezone.now()
+        if note is not None:
+            obj.handover_note = str(note)[:2000]
+        obj.save(update_fields=["handed_off_at", "handover_note", "updated_at"])
+        from common.audit import write_audit
+        write_audit(request.user, "execute", "DutySchedule", obj.pk,
+                    after={"duty_date": str(obj.duty_date), "shift": obj.shift,
+                           "handed_off": True, "note": obj.handover_note},
+                    source_ip=request.META.get("REMOTE_ADDR", ""))
+        return Response(DutyScheduleSerializer(obj).data)
