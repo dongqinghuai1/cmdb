@@ -56,13 +56,58 @@ def login(u, p):
 
 
 admin = login("admin", "nops@2025")
-mgr = login("mgr_approver", "NopsTest@2025")
-ro = login("op_low", "NopsTest@2025")
-viewer = login("viewer_x", "NopsTest@2025")
+
+
+def ensure_any(u, pwds, seed_pwd=None):
+    """多口令回退登录（同名演示用户可能被其它回归脚本以不同口令创建）；
+    全部失败且给 seed_pwd 时尝试创建（仅当用户缺失有效）。"""
+    for p in pwds:
+        try:
+            return login(u, p)
+        except AssertionError:
+            continue
+    if seed_pwd:
+        call("POST", "/system/users/", admin, {"username": u, "password": seed_pwd})
+        try:
+            return login(u, seed_pwd)
+        except AssertionError:
+            pass
+    raise AssertionError(f"login {u} failed with candidates {pwds}")
+
+
+mgr = ensure_any("mgr_approver", ["NopsTest@2025"], seed_pwd="NopsTest@2025")
+ro = ensure_any("op_low", ["NopsTest@2025", "NopsOps@2025"], seed_pwd="NopsTest@2025")
+viewer = ensure_any("viewer_x", ["NopsTest@2025"], seed_pwd="NopsTest@2025")
 
 _, us = call("GET", "/system/users/?page_size=200", admin)
 by_name = {u["username"]: u["id"] for u in us["results"]}
 mid, roid = by_name["mgr_approver"], by_name["op_low"]
+
+
+def ensure_ro_view_perm():
+    """op_low 由其它脚本（verify_automate）创建且无角色；补最小"仅 change.ticket.view"角色，
+    使只读/验证人身份分支生效（不能选含 approve/edit/execute 的宽角色，否则负例失效）。"""
+    _, ps = call("GET", "/system/permissions/?page_size=500", admin)
+    pids = {}
+    for p in ps["results"]:
+        if p.get("code") in ("change.ticket.view", "change.ticket.edit",
+                             "change.ticket.approve", "change.ticket.execute"):
+            pids.setdefault(p["code"], p["id"])
+    if "change.ticket.view" not in pids:
+        return
+    _, rs = call("GET", "/system/roles/?page_size=200", admin)
+    view_only = [r for r in rs["results"]
+                 if pids["change.ticket.view"] in (r.get("permissions") or [])
+                 and not any(pids.get(k) in (r.get("permissions") or [])
+                             for k in ("change.ticket.edit", "change.ticket.approve",
+                                       "change.ticket.execute"))]
+    if not view_only:
+        return
+    hit = min(view_only, key=lambda r: r["id"])  # readonly 最小角色优先
+    call("PATCH", f"/system/users/{roid}/", admin, {"roles": [hit["id"]]})
+
+
+ensure_ro_view_perm()
 
 PLAN = {"plan_start": "2026-09-10T01:00:00+08:00", "plan_end": "2026-09-10T03:00:00+08:00"}
 CONTENT = {"summary": "核心交换机割接配置", "impact": "影响 1 分钟", "steps": "1)备份 2)下发 3)验证",

@@ -40,6 +40,8 @@ app.conf.beat_schedule = {
     # 告警闭环：自动恢复 + 升级检查
     "alert-auto-resolve": {"task": "alert.auto_resolve", "schedule": 120.0},
     "alert-check-escalation": {"task": "alert.check_escalation", "schedule": 120.0},
+    # 根因抑制同步（拓扑邻接 × 告警级别 → suppressed_by_id 标记/清除）
+    "alert-root-suppression": {"task": "alert.sync_root_suppression", "schedule": 120.0},
     # 平台自监控 + 日志清理
     "platform-self-check": {"task": "monitor.self_check", "schedule": 300.0},
     "log-cleanup": {"task": "monitor.log_cleanup", "schedule": crontab(hour=4, minute=0)},

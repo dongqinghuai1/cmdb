@@ -79,11 +79,13 @@ class LogRecordViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=["post"], url_path="test-write")
     def test_write(self, request):
         """写入一条测试日志（演示/联调 syslog 链路）。body: {message, severity?, device?}"""
+        from django.utils import timezone
         rec = LogRecord.objects.create(
             device_id=request.data.get("device"),
             source="platform", facility="user",
             severity=int(request.data.get("severity", 6)),
-            message=str(request.data.get("message", "nops test log"))[:8000])
+            message=str(request.data.get("message", "nops test log"))[:8000],
+            occurred_at=timezone.now())
         return Response({"id": rec.id, "occurred_at": rec.occurred_at})
 
     @action(detail=False, methods=["get"])

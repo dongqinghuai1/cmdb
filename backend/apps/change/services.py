@@ -436,6 +436,16 @@ def start_change_impl(user, t: object, data: dict, source_ip: str = "") -> dict:
     t.actual_start = tz.now()
     t.save(update_fields=["status", "actual_start", "updated_at"])
     _audit_change(user, "execute", t, after={"to": t.status}, source_ip=source_ip)
+    # 变更窗口自动静默（best-effort）：受影响设备在 实际开始..计划结束 期间不进告警
+    try:
+        from apps.alert.services import change_window_maintenance
+        affected = (t.content or {}).get("affected_device_ids") or []
+        if affected:
+            change_window_maintenance(affected, t.id, started_at=t.actual_start,
+                                      ended_at=t.plan_end,
+                                      reason=f"变更单 {t.ticket_no} 自动维护窗口")
+    except Exception:  # noqa: BLE001  联动失败不影响实施主流程
+        pass
     return {"status": t.status, "actual_start": t.actual_start.isoformat()}
 
 
@@ -472,6 +482,11 @@ def close_change(user, t: object, data: dict, source_ip: str = "") -> dict:
     t.status = ChangeTicket.Status.CLOSED
     t.save(update_fields=["status", "result_desc", "updated_at"])
     _audit_change(user, "execute", t, after={"to": t.status}, source_ip=source_ip)
+    try:
+        from apps.alert.services import end_ticket_maintenance
+        end_ticket_maintenance(t.id)  # 提前收口自动维护窗口
+    except Exception:  # noqa: BLE001
+        pass
     return {"status": t.status}
 
 
@@ -491,4 +506,9 @@ def rollback_change(user, t: object, data: dict, source_ip: str = "") -> dict:
     t.status = ChangeTicket.Status.ROLLEDBACK
     t.save(update_fields=["rollback_plan", "result_desc", "status", "updated_at"])
     _audit_change(user, "execute", t, after={"to": t.status}, source_ip=source_ip)
+    try:
+        from apps.alert.services import end_ticket_maintenance
+        end_ticket_maintenance(t.id)
+    except Exception:  # noqa: BLE001
+        pass
     return {"status": t.status}

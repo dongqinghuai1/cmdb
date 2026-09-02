@@ -271,3 +271,12 @@ def check_escalation():
                 fired_count=F("fired_count") + 1, last_fired_at=now)
             escalated += 1
     return {"escalated": escalated, "ts": str(now)}
+
+
+# ---------- 根因抑制同步（拓扑 × 告警级别；幂等周期任务） ----------
+
+@shared_task(name="alert.sync_root_suppression")
+def sync_root_suppression():
+    """周期收敛：父宕机下游噪音标记 suppressed_by_id；根因恢复后自动清除。"""
+    from apps.alert.services import sync_root_suppression as _sync
+    return _sync()

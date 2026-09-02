@@ -13,9 +13,22 @@ class AlertRuleSerializer(serializers.ModelSerializer):
 
 
 class AlertEventSerializer(serializers.ModelSerializer):
+    suppressed = serializers.SerializerMethodField()
+    suppressed_root_title = serializers.SerializerMethodField()
+
     class Meta:
         model = AlertEvent
         fields = "__all__"
+        read_only_fields = ["suppressed", "suppressed_root_title"]
+
+    def get_suppressed(self, obj):
+        return bool(obj.suppressed_by_id)
+
+    def get_suppressed_root_title(self, obj):
+        if not obj.suppressed_by_id:
+            return ""
+        root = AlertEvent.objects.filter(pk=obj.suppressed_by_id).only("title").first()
+        return root.title if root else f"事件#{obj.suppressed_by_id}（已删）"
 
 
 class AlertSilenceSerializer(serializers.ModelSerializer):
@@ -99,6 +112,16 @@ class AlertEventViewSet(viewsets.ModelViewSet):
         ev.resolved_at = timezone.now()
         ev.save(update_fields=["status", "resolved_at", "updated_at"])
         return Response(AlertEventSerializer(ev).data)
+
+    @action(detail=False, methods=["post"], url_path="suppress-sync")
+    def suppress_sync(self, request):
+        """手动触发一轮根因抑制同步（幂等；周期任务 alert.sync_root_suppression 每 120s）。"""
+        from common.permissions import has_perm
+        from rest_framework.exceptions import PermissionDenied
+        from apps.alert.services import sync_root_suppression
+        if not (request.user.is_superuser or has_perm(request.user, "alert.event.execute")):
+            raise PermissionDenied("无告警处理权限（alert.event.execute），不能触发抑制同步")
+        return Response(sync_root_suppression())
 
     @action(detail=True, methods=["post"], url_path="create-incident")
     def create_incident(self, request, pk=None):

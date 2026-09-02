@@ -66,6 +66,21 @@ def ensure_user(u, p):
     return login(u, p), False
 
 
+def ensure_user_pwd(u, p):
+    """同名用户口令不一致（其它回归脚本改过）→ admin PATCH 对齐后重登。"""
+    adm = login("admin", ADMIN_PWD)
+    tok = login(u, p)
+    if tok:
+        return tok, True
+    _, us = call("GET", "/system/users/?page_size=200", adm)
+    hit = next((x for x in us["results"] if x["username"] == u), None)
+    if hit:
+        call("PATCH", f"/system/users/{hit['id']}/", adm, {"password": p}, expect=200)
+        return login(u, p), False
+    st, _ = call("POST", "/system/users/", adm, {"username": u, "password": p}, expect=201)
+    return login(u, p), False
+
+
 def find_script(tok, name):
     st, r = call("GET", "/automate/scripts/?page_size=100", tok)
     return next((s for s in r.get("results", []) if s["name"] == name), None)
@@ -88,8 +103,12 @@ def main():
     ok(bool(admin), "admin 登录")
     if not admin:
         return
-    mgr, _ = ensure_user("mgr_approver", MGR_PWD)
-    ops, _ = ensure_user("op_low", OPS_PWD)  # 无任何角色 -> 权限护栏用
+    mgr, _ = ensure_user_pwd("mgr_approver", MGR_PWD)
+    ops, _ = ensure_user_pwd("op_low", OPS_PWD)  # 无任何角色 -> 权限护栏用
+    # op_low 可能被 verify_change 对齐为 readonly 角色；本脚本护栏需要无角色 → 每次起点清空
+    _, usx = call("GET", "/system/users/?page_size=200", admin)
+    oid = next(u["id"] for u in usx["results"] if u["username"] == "op_low")
+    call("PATCH", f"/system/users/{oid}/", admin, {"roles": []})
     devs = call("GET", "/cmdb/devices/?page_size=200", admin)[1].get("results", [])
     ids = [d["id"] for d in devs]
     ok(len(ids) >= 3, f"演示设备 >= 3 台（当前 {len(ids)}）")
