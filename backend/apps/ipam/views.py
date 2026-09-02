@@ -3,9 +3,9 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from apps.ipam.models import IpAddress, Subnet, Vlan
-from apps.ipam.services import import_arp, subnet_usage
+from apps.ipam.services import arp_poll, import_arp, subnet_map, subnet_usage
 from apps.system.views import BaseModelViewSet
-from common.permissions import RbacPermission
+from common.permissions import RbacPermission, has_perm
 
 
 class VlanSerializer(serializers.ModelSerializer):
@@ -75,6 +75,13 @@ class SubnetViewSet(BaseModelViewSet):
     def usage(self, request, pk=None):
         return Response(subnet_usage(self.get_object()))
 
+    @action(detail=True, methods=["get"])
+    def map(self, request, pk=None):
+        """大网段格子图切片：?offset=&limit=（上限 2048 格/次），大段不物化全量。"""
+        sn = self.get_object()
+        return Response(subnet_map(sn, offset=request.query_params.get("offset", 0),
+                                   limit=request.query_params.get("limit", 512)))
+
 
 class IpViewSet(BaseModelViewSet):
     queryset = IpAddress.objects.select_related("subnet").all()
@@ -82,9 +89,25 @@ class IpViewSet(BaseModelViewSet):
     required_perm = "cmdb.device.view"
     filterset_fields = ["subnet", "status", "device_id", "source"]
 
+    def _need_execute(self):
+        if not (self.request.user.is_superuser or has_perm(self.request.user,
+                                                           "cmdb.device.execute")):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("无 IPAM 导入/采集权限（cmdb.device.execute）")
+
     @action(detail=False, methods=["post"], url_path="import-arp")
     def import_arp(self, request):
+        self._need_execute()
         text = request.data.get("text", "")
         if not text.strip():
             return Response({"detail": "text required（每行: IP MAC）"}, status=400)
         return Response(import_arp(text))
+
+    @action(detail=False, methods=["post"], url_path="arp-poll")
+    def arp_poll(self, request):
+        """SNMP ARP 采集（复用 cmdb.snmp 单采集栈）。body: {mock?:0|1, device_ids?:[..]}。
+        mock=1 演练样例；真实走 ipNetToMediaTable。登记/冲突/interface 回填见 services。"""
+        self._need_execute()
+        mock = bool(request.data.get("mock") or 0)
+        res = arp_poll(device_ids=request.data.get("device_ids") or None, mock=mock)
+        return Response(res)

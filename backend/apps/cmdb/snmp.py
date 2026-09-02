@@ -409,3 +409,74 @@ def collect_pdu(host, community, port=161, timeout=1.5, mock=False):
     raise RequiresCalibration(
         "PDU-MIB 供应商模板待校准：请先以 Prometheus（NOPS_PROM_POWER_QUERIES）接入实测，"
         "或 mock=1 演练（dcim 采集任务将本类设备计为待校准跳过）")
+
+
+# ---------- IP-MIB ARP 表走查（ipNetToMediaTable，只读探针） ----------
+# 1.3.6.1.2.1.4.22.1.<col>.<idx>：ifIndex=1 / physAddress=2 / netAddress=3
+NET_TO_MEDIA_ROOT = "1.3.6.1.2.1.4.22.1"
+N2M_COLS = {"if_index": 1, "mac": 2, "ip": 3}
+
+
+def _n2m_mac(val):
+    if isinstance(val, bytes):
+        return ":".join(f"{b:02x}" for b in val[:6])
+    s = str(val).strip()
+    digits = "".join(c for c in s if c in "0123456789abcdefABCDEF")
+    if len(digits) >= 12:
+        return ":".join(digits[i:i + 2] for i in range(0, 12, 2))
+    return s
+
+
+def _n2m_ip(val):
+    if isinstance(val, bytes) and len(val) == 4:
+        return ".".join(str(b) for b in val)
+    s = str(val).strip()
+    import ipaddress
+    try:
+        return str(ipaddress.ip_address(s))
+    except ValueError:
+        return s
+
+
+def parse_arp_table(rows):
+    """ipNetToMediaTable rows → [{ip, mac, if_index}]（实体层只认 4 字节 MAC 的 IPv4）。"""
+    prefix = NET_TO_MEDIA_ROOT + "."
+    rev = {v: k for k, v in N2M_COLS.items()}
+    out = {}
+    for oid, val in rows:
+        if not oid.startswith(prefix):
+            continue
+        rest = oid[len(prefix):].split(".")
+        try:
+            col, idx = int(rest[0]), tuple(int(x) for x in rest[1:])
+        except (ValueError, IndexError):
+            continue
+        name = rev.get(col)
+        if name is None or not idx:
+            continue
+        out.setdefault(idx, {})[name] = val
+    cleaned = []
+    for idx, m in out.items():
+        mac = _n2m_mac(m.get("mac", ""))
+        ip = _n2m_ip(m.get("ip", ""))
+        if len(mac.replace(":", "")) != 12:
+            continue
+        try:
+            import ipaddress
+            ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        cleaned.append({"ip": ip, "mac": mac, "if_index": m.get("if_index")})
+    return cleaned
+
+
+def collect_arp(host, community, port=161, timeout=1.5, mock=False):
+    """ARP 表走查（只读探针）→ {rows: [{ip, mac, if_index}]}。
+    mock=True 内置样例（回归/演练，不触网）；真实走 IP-MIB 标准表，跨厂商通用。"""
+    if mock:
+        return {"rows": [
+            {"ip": "10.99.1.22", "mac": "6c:92:bf:00:00:16", "if_index": 13},
+            {"ip": "10.99.1.23", "mac": "6c:92:bf:00:00:17", "if_index": 13},
+        ]}
+    rows = snmpwalk(host, community, NET_TO_MEDIA_ROOT, port=port, timeout=timeout)
+    return {"rows": parse_arp_table(rows)}

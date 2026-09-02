@@ -1,6 +1,6 @@
 # 交接文档（面向下一个开发智能体）
 
-> 最后更新：M2026-09-23b（飞书 SSO，见文末 §40）。
+> 最后更新：M2026-09-24（IPAM 收尾，见文末 §41）。
 > 一期+二期已完成并实测通过；三期「自动化运维」（M2026-09-02）、「轻量事件单」（M2026-09-02b）、「轻量变更单」（M2026-09-02c）、「CMDB 基础补齐 R1/R2/R3」（M2026-09-03/03b/03c）、「资产生命周期」（M2026-09-03d）已上线，见文末里程碑。
 > 读完本文 + DEPLOY.md + DEVELOPMENT.md 即可接手。
 
@@ -37,7 +37,7 @@
 
 ## 3. 待办清单（按 PRD 路线图）
 
-**二期**：syslog 接收+日志检索、NCM 配置备份/diff、拓扑(~~LLDP 自动发现~~ ✅M2026-09-17；G6 手工布局保存待办)、AP 台账同步、~~告警收敛/静默~~ ✅（占用静默+复燃合并 M2026-09-18 / 根因抑制+变更窗口自动静默 M2026-09-21）、IPAM、~~飞书 SSO~~ ✅（M2026-09-23b）、Prometheus remote_write、路由快照采集（~~change_ticket 轻量变更单~~ ✅ 已于三期补齐，见 M2026-09-02c）
+**二期**：syslog 接收+日志检索、NCM 配置备份/diff、拓扑(~~LLDP 自动发现~~ ✅M2026-09-17；G6 手工布局保存待办)、AP 台账同步、~~告警收敛/静默~~ ✅（占用静默+复燃合并 M2026-09-18 / 根因抑制+变更窗口自动静默 M2026-09-21）、~~IPAM~~ ✅（M2026-09-24：基础台账 M2026-09-0x + ARP 采集收尾）、~~飞书 SSO~~ ✅（M2026-09-23b）、Prometheus remote_write、路由快照采集（~~change_ticket 轻量变更单~~ ✅ 已于三期补齐，见 M2026-09-02c）
 **三期**：~~自动化运维~~ ✅、~~轻量事件单~~ ✅、~~轻量变更单(二期欠账)~~ ✅、~~线缆与 LLDP 比对~~ ✅（M2026-09-17）、~~固件升级/值班~~ ✅（值班 M2026-09-18b / 固件升级编排 M2026-09-20）、~~安全基线~~ ✅（M2026-09-19）、~~报表中心~~ ✅（M2026-09-22）、~~PDU 电源~~ ✅（M2026-09-22b）、~~虚机 vCenter 同步~~ ✅（M2026-09-23）；剩余：资产生命周期+保修/借用
 **四期**：AI（LLM 网关已留 settings.LLM_*、NL2Query、根因分析、ChatOps 飞书机器人、RAG）
 **技术债**：ai/report 骨架 app 补全；巡检只实现了 2 种检查类型（online 状态/接口错包阈值）；collect_shard 需要真实 SNMP 设备联调；audit_log/log_record/login_event 分区表转换（ER D12）；事件单超时仅时间线提醒（飞书/升级未接）
@@ -64,7 +64,7 @@
 | verify_ghost.py | 软删除幽灵设备不阻塞位置删除 | 4 PASS |
 | verify_edit.py | 设备位置编辑（换柜/冲突/下架） | 7 PASS |
 | verify_collect.py | 真实采集链路(SNMP/ICMP) | 6 PASS |
-| verify_ipam.py | IPAM 地址/VLAN 闭环 | PASS |
+| **verify_ipam.py** | **IPAM：VLAN/Subnet/IP CRUD + usage + 越界拒绝 / ARP 文本导入(新增/保留位→used/冲突/范围外/同 mac) / SNMP ARP 采集演练 mock(登记 .22/.23) 含 interface 回填 / 大网段格子图切片(offset/limit) / 写门(cmdb.device.execute) 负例** | **17 PASS（sqlite 与容器 PG 各一遍）** |
 | verify_ncm.py | NCM 备份/基线 | 8 PASS |
 | verify_syslog.py | Syslog 收流/检索/限流 | PASS |
 | verify_silence_ap.py | 告警静默 + AP 台账同步 | 7 PASS |
@@ -561,6 +561,17 @@
   - `apps/` CRUD + `POST {id}/contacts-sync/`（system.sso.view/edit 门禁）：mock 走部门树+2 用户样例幂等；真实 contact API 未校准前主动提示。权限点 system.sso.view/edit 入 init（sys_admin view+edit；auditor/net 不可见）。
 - **验证**：`scripts/verify_feishu.py` **19 PASS ×2**（sqlite/PG）：F1-F4 未配置/权限门 → F5 建应用(secret 不回显) → F6 跳转 URL → F7-F9 回调建号+JWT+me+同 union 不重号 → F10 第二身份 → F11 关自动开通 403 → F13-F15 通讯录同步幂等+部门落库 → F16-F18 写门负例 → F19 清理。回归 api_test 33（sqlite）、verify_duty 19（PG）保持绿。
 - **待办/坑**：① 真实 OAuth/contact 分支需在具备飞书自建应用（app_id/app_secret + redirect 白名单）环境校准——本地按 mock_mode 全链路演练、未就绪不写假数据；② 组织同步增量（部门删除收敛、手机号/工号映射本地账号合并）与离职禁用待做；③ 登录锁定（login_fail/locked_until 已建字段）与 SSO 联动、前端"飞书登录"按钮/绑定页待做，后端就绪。
+
+---
+
+## 41. 里程碑 M2026-09-24：IPAM 收尾（ARP 周期采集 + interface 回填 + 大网段格子图）
+
+- **范围**：二期 IPAM 收官。基础台账（VLAN/Subnet/IP + usage + ARP 文本导入/冲突检测）此前已闭环；本轮补齐三块欠账，全部复用既有单采集栈（apps/cmdb/snmp.py BER 走查），不另起采集器。
+- **ARP 周期采集**：`apps/cmdb/snmp.py` 新增 IP-MIB `ipNetToMediaTable`（1.3.6.1.2.1.4.22.1）走查 `collect_arp`（mac/ip 容错解码、4 字节 MAC 过滤；mock 演练样例）+ `apps/ipam/services.arp_poll()`：遍历持 snmp_v2c 凭据设备 → 走查 → ingest；单设备失败/未校准不拖垮。beat `ipam.arp_poll`（每 10 分钟，与 cmdb.snmp_collect 同节奏）。手动 `POST /ipam/ips/arp-poll/`{mock,device_ids}。
+- **interface 回填**：ingest 携带采集设备 + 行 if_index，命中 `DeviceInterface(device_id, if_index)` 即回填 `IpAddress.interface_id`（linked 计数入汇总）；文本导入路径共用同一登记内核（新计数含 touched/linked）。
+- **大网段格子图**：`GET /ipam/subnets/{id}/map/?offset=&limit=`（limit≤2048/次）——**整数偏移切片、不物化整段**（/8 也安全），每格带登记状态 + usage 汇总；写门统一 `cmdb.device.execute`（import-arp/arp-poll 负例 403）。
+- **验证**：`scripts/verify_ipam.py` 重写并扩容至 **17 PASS ×2**（sqlite/PG）：P1-P9 基础闭环（含同 mac 不误报）→ P10/P11 权限负例 → P12-P14 mock ARP 采集登记 .22/.23 与重复 poll 幂等 → P15-P17 格子图切片（首/尾窗口、.22 状态、auditor 403）。drift 复核：仅剩既有 dcimticket kind/status 漂移（纪律内不处理），本轮零新增漂移。
+- **待办/坑**：① 大网段前端逐格渲染仍受浏览器 DOM 限制——建议分页窗口滚动虚拟化（后端切片已就绪）；② ARP 采集真实链路需在具备 SNMP 设备环境联调（标准表跨厂商，冲突检测走 mac 变化）；③ 终端定位增强（MAC-IP 学习 × 工位/端口档案、私接检测）见 IA-MENU"终端定位"规划，本轮未做。
 
 ---
 

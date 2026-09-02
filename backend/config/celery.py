@@ -56,6 +56,8 @@ app.conf.beat_schedule = {
     "cmdb-link-quality-sample": {"task": "cmdb.sample_link_quality", "schedule": 300.0},
     # vCenter 虚机同步（每小时 25 分；真实拉取模板未校准源自动跳过记录）
     "cmdb-vcenter-sync": {"task": "cmdb.sync_vcenter", "schedule": crontab(minute=25)},
+    # IPAM ARP 周期采集（10 分钟一次 → IP 台账登记/冲突/interface 回填）
+    "ipam-arp-poll": {"task": "ipam.arp_poll", "schedule": 600.0},
     # PDU/UPS 电源实测（5 分钟一次 → dcim_powersample；无 Prometheus 环境跳过）
     "dcim-power-poll": {"task": "dcim.poll_power", "schedule": 300.0},
     # SNMP 采集（10 分钟一次 → 接口状态/错误；无线 9800 适配待校准）
