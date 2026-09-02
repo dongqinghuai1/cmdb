@@ -10,8 +10,9 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
 from apps.cmdb import storage
-from apps.cmdb.models import (CiModel, CiModelAttr, Device, DeviceAssetEvent,
-                              DeviceAttachment, DeviceGroup, License, TechSnapshot)
+from apps.cmdb.models import (Business, CiModel, CiModelAttr, Device, DeviceAssetEvent,
+                              DeviceAttachment, DeviceBusiness, DeviceGroup, License,
+                              TechSnapshot)
 from apps.cmdb.serializers import (CiModelAttrSerializer, CiModelSerializer,
                                    DeviceGroupSerializer, DeviceSerializer,
                                    DeviceInterfaceSerializer, BusinessSerializer)
@@ -64,6 +65,15 @@ class DeviceViewSet(BaseModelViewSet):
         if self.request.query_params.get("deleted") == "1":
             qs = Device.all_objects.select_related(
                 "model", "site", "region", "rack", "owner").filter(deleted_at__isnull=False)
+        # 扩展过滤（系统域清单/业务归属用）
+        qp = self.request.query_params
+        if qp.get("business_id"):
+            qs = qs.filter(id__in=DeviceBusiness.objects.filter(
+                business_id=int(qp["business_id"])).values_list("device_id", flat=True))
+        if qp.get("is_virtual") in ("1", "0"):
+            qs = qs.filter(is_virtual=bool(int(qp["is_virtual"])))
+        if qp.get("model_category"):
+            qs = qs.filter(model__category=qp["model_category"])
         return qs
     serializer_class = DeviceSerializer
     required_perm = "cmdb.device.view"
@@ -616,6 +626,79 @@ class DeviceViewSet(BaseModelViewSet):
             "ap": {"rows": ap_rows},
             "vlans": {"rows": vlan_rows},
             "extensions": ext_items,
+        })
+
+    # ---------- 业务-设备归属（系统域：业务矩阵） ----------
+    @action(detail=False, methods=["get"], url_path="business-summary")
+    def business_summary(self, request):
+        rows = []
+        alive = Device.objects.filter(deleted_at__isnull=True)
+        alive_ids = set(alive.values_list("id", flat=True))
+        for b in Business.objects.order_by("code")[:200]:
+            links = DeviceBusiness.objects.filter(business=b, device_id__in=alive_ids)
+            regions, sites = set(), set()
+            for l in links.values("device__region__name", "device__site__name"):
+                if l.get("device__region__name"):
+                    regions.add(l["device__region__name"])
+                if l.get("device__site__name"):
+                    sites.add(l["device__site__name"])
+            rows.append({
+                "id": b.id, "name": b.name, "code": b.code, "importance": b.importance,
+                "remark": b.remark, "device_count": links.count(),
+                "regions": sorted(regions)[:8], "sites": sorted(sites)[:8],
+            })
+        linked = alive.filter(id__in=DeviceBusiness.objects.values("device_id")).count()
+        return Response({
+            "businesses": rows, "total_devices": alive.count(),
+            "linked_devices": linked, "unassigned_devices": alive.count() - linked,
+        })
+
+    @action(detail=False, methods=["post"], url_path="business-assign")
+    def business_assign(self, request):
+        """业务设备归属维护：body {business_id, device_ids:[...], action: add|remove}。"""
+        _need_edit(request.user)
+        b = Business.objects.filter(pk=request.data.get("business_id")).first()
+        if not b:
+            return Response({"detail": "business not found"}, status=404)
+        action = request.data.get("action")
+        if action not in ("add", "remove"):
+            return Response({"detail": "action must be add/remove"}, status=400)
+        ids = request.data.get("device_ids") or []
+        if not isinstance(ids, list):
+            return Response({"detail": "device_ids must be list"}, status=400)
+        ids = list(dict.fromkeys(int(i) for i in ids if str(i).isdigit()))
+        existing = set(DeviceBusiness.objects.filter(business=b, device_id__in=ids)
+                       .values_list("device_id", flat=True))
+        role = request.data.get("role") or "member"
+        if action == "add":
+            to_create = [DeviceBusiness(business=b, device_id=i, role=role)
+                         for i in ids if i not in existing]
+            DeviceBusiness.objects.bulk_create(to_create)
+            changed = len(to_create)
+        else:
+            changed, _ = DeviceBusiness.objects.filter(business=b, device_id__in=ids).delete()
+        from common.audit import write_audit
+        write_audit(request.user, "update", "Business", b.pk,
+                    before={"action": action}, after={"device_ids": ids, "changed": changed},
+                    source_ip=request.META.get("REMOTE_ADDR", ""))
+        return Response({"business_id": b.pk, "action": action, "changed": changed})
+
+    # ---------- 系统域清单（形态/厂商/OS/用途 分布 + 明细） ----------
+    @action(detail=False, methods=["get"], url_path="system-summary")
+    def system_summary(self, request):
+        from django.db.models import Count as _C
+        qs = Device.objects.filter(deleted_at__isnull=True)
+        q = lambda base: list(base.annotate(c=_C("id")).order_by("-c"))
+        morph = [{"label": "物理机" if not m["is_virtual"] else "虚拟机/云主机",
+                  "is_virtual": m["is_virtual"], "count": m["c"]}
+                 for m in q(qs.values("is_virtual"))]
+        model_cat = q(qs.exclude(model__isnull=True)
+                      .values("model__code", "model__name", "model__category"))
+        return Response({
+            "morph": morph, "model_cat": model_cat,
+            "vendor": q(qs.exclude(vendor="").values("vendor")),
+            "os": q(qs.exclude(sw_version="").values("sw_version")),
+            "usage": q(qs.exclude(usage_tag="").values("usage_tag")),
         })
 
 

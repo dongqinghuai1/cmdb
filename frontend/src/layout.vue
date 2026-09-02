@@ -61,6 +61,7 @@ const MENU = [
     children: [
       { path: "/devices", label: "设备台账（360°）", codes: ["menu.asset"] },
       { path: "/cmdb-tools", label: "设备运营（质量/分组/软件/保修）", codes: ["menu.asset"] },
+      { path: "/bizsys", label: "业务与系统清单", codes: ["menu.asset"] },
       { path: "/dcim", label: "机房与机柜（U 位/平面图）", codes: ["menu.dcim"] },
     ],
   },

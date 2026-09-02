@@ -344,3 +344,19 @@
 - **按需接口**：`POST /cmdb/devices/tech-retention/` body {keep?}——execute 权限；非超管需 confirm=1；执行写 audit（execute 留痕）。
 - **验证**：`scripts/verify_retention.py` 9 PASS ×2（sqlite + 容器 PG）：7 条写库最新透出 → 无 confirm 400 → confirm 执行 removed=4 keep=3 → 最新仍 marker=6 → 幂等 removed=0 → 非法 keep 400 → purge 后全量清理正常；worker 日志确认任务注册（`. cmdb.cleanup_techsnapshots`）。
 - **待办/坑**：保留条数当前全局 keep=5，未做按品类差异化（如 acl 保留更多）；清理仅覆盖 TechSnapshot，路由快照 RouteTableSnapshot 的保留策略同机制待接入（NCM 侧）。
+
+---
+
+## 22. 里程碑 M2026-09-08：业务-设备归属 + 形态/系统清单（系统管理员域视图）
+
+- **范围**：IA 1.2 系统管理员域——业务矩阵（DeviceBusiness 表早已建、无 API）与形态/系统清单（复用设备字段聚合，无新表）。
+- **后端**（apps/cmdb/views.py）：
+  - 设备列表扩展过滤：`business_id`（跨 DeviceBusiness）/ `is_virtual=1|0` / `model_category`；
+  - `GET /cmdb/devices/business-summary/`：业务列表（等级/设备数/覆盖区域站点）+ linked/unassigned 统计；
+  - `POST /cmdb/devices/business-assign/`：{business_id, device_ids, action: add|remove}（edit 权限 + audit update）；
+  - `GET /cmdb/devices/system-summary/`：形态(物理/虚拟)/型号类别/厂商/系统版本/用途 计数分布。
+- **前端**：新页 `Bizsys.vue`（路由 `/bizsys`，资产与机房→「业务与系统清单」，nav=menu.asset）：
+  - Tab 业务设备归属：业务列表（点击高亮）→ 成员设备表（可移除）→「添加设备」多选弹窗；顶部未归属计数提醒；
+  - Tab 形态与系统清单：形态/型号类别/OS 版本/厂商/用途分布，点 OS 行或按 形态/类别/关键字 过滤设备明细（行进 360）。
+- **验证**：`scripts/verify_bizsys.py` 12 PASS ×2（sqlite op_low / 容器 PG viewer_pg）：矩阵结构、临时业务建-归属-add-过滤-汇总-remove-清理全链路、只读归属维护 403、is_virtual 过滤数与汇总一致、清理无残留。
+- **待办/坑**：① Business CRUD 已有（BaseModelViewSet，cmdb.device 门禁）但无独立菜单（页面入口内嵌本页+设备台账）；② system-summary 未含 attrs 动态字段（硬件配置/内核细项在 attrs，需按模型模板聚合）；③ 应用服务/备份状态仍需采集（IA 1.2 远期）。
