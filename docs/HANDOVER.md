@@ -333,3 +333,14 @@
 - **前端**：Device360 技术概览卡头加「粘贴输出解析」按钮（品类+输出+解析预览 summary/rows→保存为快照，保存后刷新）；网络总览扩展位卡：已采集→绿标「N 台 / M 条 + 最新时间」，未接入→灰标说明。
 - **验证**：`scripts/verify_techparse.py` 13 PASS ×2（sqlite op_low / 容器 PG viewer_pg）：预览不落库、垃圾输入 400+hint、只读可预览但保存 403、三类落库与 tech 透出、总览聚合 collected/devices/total、只读可见、purge 后孤儿快照不计入回落未采集（acl 可能含 R3 遗留数据故只断言 nat/ipsec）。
 - **待办/坑**：① 解析器覆盖的是"典型输出"，真实设备页头/版本差异需在驱动阶段补样例回归；② 快照清理（按 kind+device 保留 N 条）尚未做；③ SSH 自动采集驱动（Netmiko 或跳板执行 + 周期任务）为后续目标，tech-parse 即其共享落库通道。
+
+---
+
+## 21. 里程碑 M2026-09-07：TechSnapshot 保留策略（周期清理 + 按需执行）
+
+- **范围**：限制 cmdb_techsnapshot 无限增长——按 (device_id, kind) 只保留最近 N 条。
+- **服务**：`apps/cmdb/retention.py::cleanup_techsnapshots(keep=5)`——倒序分组计数，批量删除超龄记录，返回 {kept_groups, removed, keep, retained}；**模型在函数内惰性导入**（celery autodiscover 阶段 django 未 ready，顶层 import 会让任务静默注册失败——本轮踩坑并修复）。
+- **任务**：`apps/cmdb/tasks.py::cmdb.cleanup_techsnapshots`，beat 新增 `cmdb-techsnapshot-retention`（每日 04:30，crontab）。
+- **按需接口**：`POST /cmdb/devices/tech-retention/` body {keep?}——execute 权限；非超管需 confirm=1；执行写 audit（execute 留痕）。
+- **验证**：`scripts/verify_retention.py` 9 PASS ×2（sqlite + 容器 PG）：7 条写库最新透出 → 无 confirm 400 → confirm 执行 removed=4 keep=3 → 最新仍 marker=6 → 幂等 removed=0 → 非法 keep 400 → purge 后全量清理正常；worker 日志确认任务注册（`. cmdb.cleanup_techsnapshots`）。
+- **待办/坑**：保留条数当前全局 keep=5，未做按品类差异化（如 acl 保留更多）；清理仅覆盖 TechSnapshot，路由快照 RouteTableSnapshot 的保留策略同机制待接入（NCM 侧）。

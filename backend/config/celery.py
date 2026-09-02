@@ -45,4 +45,7 @@ app.conf.beat_schedule = {
     "log-cleanup": {"task": "monitor.log_cleanup", "schedule": crontab(hour=4, minute=0)},
     # 事件单 SLA 超时检查
     "change-sla-check": {"task": "change.check_sla", "schedule": 600.0},
+    # CMDB 技术快照保留（按 设备×品类 只留最近 N 条）
+    "cmdb-techsnapshot-retention": {"task": "cmdb.cleanup_techsnapshots",
+                                    "schedule": crontab(hour=4, minute=30)},
 }

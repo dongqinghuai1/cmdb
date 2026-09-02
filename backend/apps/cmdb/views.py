@@ -365,6 +365,24 @@ class DeviceViewSet(BaseModelViewSet):
             out.update(saved=True, snapshot_id=ts.id, created_at=ts.created_at)
         return Response(out)
 
+    @action(detail=False, methods=["post"], url_path="tech-retention")
+    def tech_retention(self, request):
+        """按需执行快照保留：body {keep?: n}；execute 权限 + 超管或 confirm=1。
+        周期执行走 celery beat（cmdb.cleanup_techsnapshots，每日 04:30）。"""
+        _need_execute(request.user)
+        if not (request.user.is_superuser or request.query_params.get("confirm") == "1"):
+            return Response({"detail": "confirm=1 required"}, status=400)
+        from apps.cmdb.retention import cleanup_techsnapshots
+        try:
+            r = cleanup_techsnapshots(request.data.get("keep") or 5)
+        except (TypeError, ValueError):
+            return Response({"detail": "keep must be int >= 1"}, status=400)
+        from common.audit import write_audit
+        write_audit(request.user, "execute", "TechSnapshot", None,
+                    after={**r, "action": "tech-retention"},
+                    source_ip=request.META.get("REMOTE_ADDR", ""))
+        return Response(r)
+
     # ---------- 软件版本一致性（5.5.4 P1 首步：型号维度版本分布） ----------
     @action(detail=False, methods=["get"], url_path="software-summary")
     def software_summary(self, request):
