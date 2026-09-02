@@ -10,5 +10,6 @@ router.register("racks", views.RackViewSet)
 router.register("reservations", views.RackReservationViewSet)
 router.register("cables", views.CableViewSet)
 router.register("site-objects", views.SiteObjectViewSet)
+router.register("op-tickets", views.DcimTicketViewSet)
 
 urlpatterns = [path("", include(router.urls))]

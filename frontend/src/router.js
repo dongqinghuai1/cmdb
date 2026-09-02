@@ -16,6 +16,7 @@ const routes = [
       { path: "changes", component: () => import("./pages/Changes.vue"), meta: { title: "变更管理" } },
       { path: "cmdb-tools", component: () => import("./pages/Cmtools.vue"), meta: { title: "设备运营" } },
       { path: "bizsys", component: () => import("./pages/Bizsys.vue"), meta: { title: "业务与系统清单" } },
+      { path: "dcim-ops", component: () => import("./pages/DcimOps.vue"), meta: { title: "机房作业工单" } },
       { path: "logs", component: () => import("./pages/Logs.vue"), meta: { title: "日志中心" } },
       { path: "ipam", component: () => import("./pages/Ipam.vue"), meta: { title: "IP 管理" } },
       { path: "devices", component: () => import("./pages/Devices.vue"), meta: { title: "设备台账" } },

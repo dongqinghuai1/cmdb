@@ -372,3 +372,14 @@
 - **前端**：Cmtools「设备运营」新增 Tab「设备借还」：在借清单（天数/逾期标红/点行进 360/归还按钮）+ 借出弹窗（仅列出 idle 设备）+ 最近借还动态表。
 - **验证**：`scripts/verify_loans.py` 13 PASS ×2（sqlite op_low / 容器 PG viewer_pg）：只读 403、缺对方 400、历史时间借出→台账在借 days≥40 overdue≥1、重复借出/提前归还 400、归还释放 idle、借还事件双留痕、purge 孤儿不计入。
 - **待办/坑**：① overdue 阈值目前常量 30（未做成参数/按设备类型差异）；② 借出仅走 usage-claim（旧"手工事件"路径不改 usage_status，可能产生账外状态——后续建议收敛到 usage-claim 单一入口）；③ 归还时 counterparty/实还日期归还凭证尚未建模（预留 note）。
+
+---
+
+## 24. 里程碑 M2026-09-10：机房作业工单（dcim 域，IA 机房运维）
+
+- **范围**：机房上下架/迁移/检修/布线作业闭环——计划→开工→完成/取消，关联机柜与设备、登记目标 U 位、执行人与结果留痕。
+- **模型**：`apps/dcim/models.py::DcimTicket`（迁移 dcim.0003）——kind(rack_in/rack_out/move/repair/cable，choices 含中文 label)、rack FK、device_id(跨 app 裸外键)+device_name 快照、u_from/u_to、status(planned/doing/done/cancelled)、assignee、planned_at/finished_at、note/result、operator_id。
+- **API**：`/dcim/op-tickets/` CRUD（读=dcim.rack.view，写经显式 `_need_perm(dcim.rack.edit)`——坑：RbacPermission 只控读，create/update/destroy 均需在 perform_* 显式门禁，本里程碑补齐）+ 动作 `start`(仅 planned)/`finish`(填 result+finished_at)/`cancel`(填 reason)，终态保护。
+- **前端**：`DcimOps.vue`（资产与机房→「机房作业工单」，nav=menu.dcim）：状态过滤、新建/编辑弹窗（类型/机柜/关联设备/目标 U 位/执行人/计划时间）、开工/完成(结果)/取消流转。
+- **验证**：`scripts/verify_dcimops.py` 12 PASS ×2（sqlite op_low / 容器 PG viewer_pg）：只读建单 403、建单/过滤/开工/重复开工 400/完成+结果落库/终态不可取消/取消流转/编辑/清理。
+- **待办/坑**：① U 位为"计划目标值"，设备实际机柜位置变更仍走设备编辑——双入口可能存在不一致（后续可做"完成时按 U 位校验冲突并一键落位"）；② 无独立菜单权限点（复用 menu.dcim + dcim.rack.*，符合角色既有授权）；③ 工单未接 change 审批流（作业类工单当前无需审批，符合轻量定位）。

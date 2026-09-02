@@ -104,3 +104,40 @@ class Cable(SoftDeleteModel):
 
     class Meta:
         unique_together = ("a_interface_id", "b_interface_id")
+
+
+class DcimTicket(TimeStampedModel):
+    """机房作业工单：上架/下架/迁移/维修/布线（IA 机房运维域；U 位目标为计划值，
+    设备实际位置变更仍走设备编辑/生命周期，避免双写冲突）。"""
+
+    class Kind(models.TextChoices):
+        RACK_IN = "rack_in", "设备上架"
+        RACK_OUT = "rack_out", "设备下架"
+        MOVE = "move", "设备迁移"
+        REPAIR = "repair", "检修维修"
+        CABLE = "cable", "布线调整"
+
+    class Status(models.TextChoices):
+        PLANNED = "planned", "待处理"
+        DOING = "doing", "进行中"
+        DONE = "done", "已完成"
+        CANCELLED = "cancelled", "已取消"
+
+    title = models.CharField(max_length=120)
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    rack = models.ForeignKey(Rack, null=True, blank=True, on_delete=models.SET_NULL,
+                             related_name="op_tickets")
+    device_id = models.BigIntegerField(null=True, blank=True, db_index=True)  # cmdb 设备
+    device_name = models.CharField(max_length=120, blank=True)
+    u_from = models.PositiveSmallIntegerField(null=True, blank=True)
+    u_to = models.PositiveSmallIntegerField(null=True, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PLANNED)
+    assignee = models.CharField(max_length=64, blank=True)
+    planned_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    note = models.CharField(max_length=500, blank=True)
+    result = models.CharField(max_length=500, blank=True)
+    operator_id = models.BigIntegerField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-id"]

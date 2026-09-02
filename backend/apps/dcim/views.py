@@ -2,11 +2,21 @@ from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from apps.dcim.models import Cable, Rack, RackReservation, Region, Site
-from apps.dcim.serializers import (CableSerializer, RackReservationSerializer,
-                                   RackSerializer, RegionSerializer, SiteSerializer)
+from apps.dcim.models import (Cable, DcimTicket, Rack, RackReservation,
+                              Region, Site, SiteObject)
+from apps.dcim.serializers import (CableSerializer, DcimTicketSerializer,
+                                   RackReservationSerializer, RackSerializer,
+                                   RegionSerializer, SiteSerializer)
 from apps.dcim.services import RackService
 from apps.system.views import BaseModelViewSet
+from common.permissions import has_perm
+from rest_framework.exceptions import PermissionDenied
+
+
+def _need_perm(user, code):
+    """dcim 视图读写门禁：admin 或持码（required_perm 只控读，写需显式）。"""
+    if not (user.is_superuser or has_perm(user, code)):
+        raise PermissionDenied("no permission")
 
 
 class RegionViewSet(BaseModelViewSet):
@@ -110,3 +120,64 @@ class CableViewSet(BaseModelViewSet):
     serializer_class = CableSerializer
     required_perm = "dcim.rack.view"
     filterset_fields = ["a_interface_id", "b_interface_id", "status", "source"]
+
+
+class DcimTicketViewSet(BaseModelViewSet):
+    """机房作业工单：上下架/迁移/维修/布线；读=dcim.rack.view，写=dcim.rack.edit。"""
+
+    queryset = DcimTicket.objects.select_related("rack")
+    serializer_class = DcimTicketSerializer
+    required_perm = "dcim.rack.view"
+    filterset_fields = {"status": ["exact"], "kind": ["exact"],
+                        "device_id": ["exact"], "rack": ["exact"]}
+
+    def perform_create(self, serializer):
+        _need_perm(self.request.user, "dcim.rack.edit")
+        super().perform_create(serializer)
+        DcimTicket.objects.filter(pk=serializer.instance.pk)\
+            .update(operator_id=self.request.user.id)
+
+    def perform_update(self, serializer):
+        _need_perm(self.request.user, "dcim.rack.edit")
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        _need_perm(self.request.user, "dcim.rack.edit")
+        super().perform_destroy(instance)
+
+    def _edit(self):
+        _need_perm(self.request.user, "dcim.rack.edit")
+
+    @action(detail=True, methods=["post"], url_path="start")
+    def start(self, request, pk=None):
+        self._edit()
+        t = self.get_object()
+        if t.status != DcimTicket.Status.PLANNED:
+            return Response({"detail": "仅待处理可开工"}, status=400)
+        t.status = DcimTicket.Status.DOING
+        t.save(update_fields=["status", "updated_at"])
+        return Response({"id": t.pk, "status": t.status})
+
+    @action(detail=True, methods=["post"], url_path="finish")
+    def finish(self, request, pk=None):
+        self._edit()
+        t = self.get_object()
+        if t.status in (DcimTicket.Status.DONE, DcimTicket.Status.CANCELLED):
+            return Response({"detail": "已结束工单不可再完成"}, status=400)
+        from django.utils import timezone
+        t.status = DcimTicket.Status.DONE
+        t.finished_at = timezone.now()
+        t.result = (request.data.get("result") or "").strip()
+        t.save(update_fields=["status", "finished_at", "result", "updated_at"])
+        return Response({"id": t.pk, "status": t.status, "finished_at": t.finished_at})
+
+    @action(detail=True, methods=["post"], url_path="cancel")
+    def cancel(self, request, pk=None):
+        self._edit()
+        t = self.get_object()
+        if t.status in (DcimTicket.Status.DONE, DcimTicket.Status.CANCELLED):
+            return Response({"detail": "已结束工单不可取消"}, status=400)
+        t.status = DcimTicket.Status.CANCELLED
+        t.result = (request.data.get("reason") or "").strip() or t.result
+        t.save(update_fields=["status", "result", "updated_at"])
+        return Response({"id": t.pk, "status": t.status})

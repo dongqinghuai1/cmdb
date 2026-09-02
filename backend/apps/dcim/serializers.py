@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
-from apps.dcim.models import Cable, Rack, RackReservation, Region, Site, SiteObject
+from apps.dcim.models import (Cable, DcimTicket, Rack, RackReservation,
+                              Region, Site, SiteObject)
 
 
 class RegionSerializer(serializers.ModelSerializer):
@@ -49,4 +50,14 @@ class CableSerializer(serializers.ModelSerializer):
 class SiteObjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = SiteObject
+        fields = "__all__"
+
+
+class DcimTicketSerializer(serializers.ModelSerializer):
+    rack_name = serializers.CharField(source="rack.name", read_only=True, default="")
+    kind_label = serializers.CharField(source="get_kind_display", read_only=True)
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+
+    class Meta:
+        model = DcimTicket
         fields = "__all__"

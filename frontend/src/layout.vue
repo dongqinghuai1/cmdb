@@ -63,6 +63,7 @@ const MENU = [
       { path: "/cmdb-tools", label: "设备运营（质量/分组/软件/保修）", codes: ["menu.asset"] },
       { path: "/bizsys", label: "业务与系统清单", codes: ["menu.asset"] },
       { path: "/dcim", label: "机房与机柜（U 位/平面图）", codes: ["menu.dcim"] },
+      { path: "/dcim-ops", label: "机房作业工单", codes: ["menu.dcim"] },
     ],
   },
   {
