@@ -110,6 +110,17 @@ class Command(BaseCommand):
         ], ["menu.home", "menu.asset", "menu.dcim"])
         auditor_role = _persona("auditor", "审计员", ["system.audit.view"],
                                 ["menu.home", "menu.security"])
+        # 只读演示角色（旧 verify_* 默认 NOPS_RO_USER 使用；无任何 edit/execute）
+        _persona("op_low", "只读观察员", [
+            "cmdb.model.view", "cmdb.device.view", "cmdb.vmware.view",
+            "dcim.region.view", "dcim.rack.view", "dcim.power.view",
+            "alert.event.view", "inspect.run.view", "monitor.log.view",
+        ], ["menu.home", "menu.asset", "menu.dcim", "menu.monitor", "menu.net"])
+        _persona("viewer_pg", "只读审计视图", [
+            "cmdb.model.view", "cmdb.device.view", "cmdb.vmware.view",
+            "dcim.region.view", "dcim.rack.view", "dcim.power.view",
+            "alert.event.view", "inspect.run.view", "monitor.log.view",
+        ], ["menu.home", "menu.asset", "menu.dcim", "menu.monitor"])
 
         # 3. 管理员
         admin, created = User.objects.get_or_create(username="admin", is_superuser=True, is_staff=True)
@@ -125,6 +136,8 @@ class Command(BaseCommand):
             ("sys_demo", Role.objects.get(code="sys_admin")),
             ("dcim_demo", Role.objects.get(code="dcim_admin")),
             ("auditor", auditor_role),
+            ("op_low", Role.objects.get(code="op_low")),
+            ("viewer_pg", Role.objects.get(code="viewer_pg")),
         ]:
             u, _ = User.objects.get_or_create(username=uname)
             u.set_password("NopsTest@2025")

@@ -589,27 +589,21 @@ class DeviceViewSet(BaseModelViewSet):
     # ---------- 保修到期提醒（5.5.7 P1：30/60/90/180 + 已过期） ----------
     @action(detail=False, methods=["get"], url_path="warranty-expiring")
     def warranty_expiring(self, request):
-        from datetime import date, timedelta
-        today = date.today()
-        days = min(int(request.query_params.get("within_days") or 90), 730)
-        qs = Device.objects.filter(deleted_at__isnull=True, warranty_until__isnull=False)
-        expired_qs = qs.filter(warranty_until__lt=today)
-        expiring = qs.filter(warranty_until__gte=today, warranty_until__lte=today + timedelta(days=days))
-        summary = {"expired": expired_qs.count(),
-                   **{str(d): qs.filter(warranty_until__gt=today,
-                                        warranty_until__lte=today + timedelta(days=d)).count()
-                      for d in (30, 60, 90, 180)}}
-        rows = []
-        for dev in list(expiring.order_by("warranty_until")[:200]) + list(expired_qs.order_by("-warranty_until")[:100]):
-            rows.append({
-                "id": dev.id, "name": dev.name, "manage_ip": str(dev.manage_ip or ""),
-                "vendor": dev.vendor, "hw_model": dev.hw_model,
-                "warranty_until": dev.warranty_until, "days_left": (dev.warranty_until - today).days,
-                "owner": dev.owner.username if dev.owner else None,
-                "region_name": dev.region.name if dev.region else None,
-                "site_name": dev.site.name if dev.site else None,
-            })
-        return Response({"summary": summary, "within_days": days, "rows": rows})
+        from apps.cmdb.warranty import warranty_snapshot
+        snap = warranty_snapshot(
+            within_days=request.query_params.get("within_days") or 90)
+        return Response(snap)
+
+    @action(detail=False, methods=["post"], url_path="warranty-notify")
+    def warranty_notify(self, request):
+        """手动触发保修到期推送（cmdb.device.execute 门禁）。body: {within_days?, dry?}
+        dry=1 默认：只回显将发送的渠道与清单，不实发；任务侧 dry=0 走 enabled 渠道。"""
+        _need_execute(request.user)
+        from apps.cmdb.warranty import notify_warranty
+        res = notify_warranty(
+            within_days=request.data.get("within_days") or 90,
+            dry=bool(request.data.get("dry", 1)))
+        return Response(res)
 
     # ---------- 网络总览（跨设备汇总：路由/邻居/链路/无线/VLAN + 扩展位） ----------
     @action(detail=False, methods=["get"], url_path="network-overview")

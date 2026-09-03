@@ -82,3 +82,11 @@ def sync_vcenter_task():
             logger.exception("vcenter sync failed src=%s", src.id)
             out.append({"source": src.name, "error": str(e)[:200]})
     return {"sources": len(out), "detail": out}
+
+
+@shared_task(name="cmdb.warranty_notify")
+def warranty_notify_task(within_days=90):
+    """保修到期提醒推送（beat 每日 09:05）：快照汇总 → enabled 通知渠道实发。
+    无 enabled 渠道时返回 would_send 空（不报错）。"""
+    from apps.cmdb.warranty import notify_warranty
+    return notify_warranty(within_days=within_days, dry=False)

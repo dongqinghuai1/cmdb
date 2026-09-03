@@ -1,6 +1,6 @@
 # 交接文档（面向下一个开发智能体）
 
-> 最后更新：M2026-09-24（IPAM 收尾，见文末 §41）。
+> 最后更新：M2026-09-24c（保修到期定时推送，见文末 §42）。
 > 一期+二期已完成并实测通过；三期「自动化运维」（M2026-09-02）、「轻量事件单」（M2026-09-02b）、「轻量变更单」（M2026-09-02c）、「CMDB 基础补齐 R1/R2/R3」（M2026-09-03/03b/03c）、「资产生命周期」（M2026-09-03d）已上线，见文末里程碑。
 > 读完本文 + DEPLOY.md + DEVELOPMENT.md 即可接手。
 
@@ -57,7 +57,7 @@
 ## 3. 待办清单（按 PRD 路线图）
 
 **二期**：syslog 接收+日志检索、NCM 配置备份/diff、拓扑(~~LLDP 自动发现~~ ✅M2026-09-17；G6 手工布局保存待办)、AP 台账同步、~~告警收敛/静默~~ ✅（占用静默+复燃合并 M2026-09-18 / 根因抑制+变更窗口自动静默 M2026-09-21）、~~IPAM~~ ✅（M2026-09-24：基础台账 M2026-09-0x + ARP 采集收尾）、~~飞书 SSO~~ ✅（M2026-09-23b）、Prometheus remote_write、路由快照采集（~~change_ticket 轻量变更单~~ ✅ 已于三期补齐，见 M2026-09-02c）
-**三期**：~~自动化运维~~ ✅、~~轻量事件单~~ ✅、~~轻量变更单(二期欠账)~~ ✅、~~线缆与 LLDP 比对~~ ✅（M2026-09-17）、~~固件升级/值班~~ ✅（值班 M2026-09-18b / 固件升级编排 M2026-09-20）、~~安全基线~~ ✅（M2026-09-19）、~~报表中心~~ ✅（M2026-09-22）、~~PDU 电源~~ ✅（M2026-09-22b）、~~虚机 vCenter 同步~~ ✅（M2026-09-23）；剩余：资产生命周期+保修/借用
+**三期**：~~自动化运维~~ ✅、~~轻量事件单~~ ✅、~~轻量变更单(二期欠账)~~ ✅、~~线缆与 LLDP 比对~~ ✅（M2026-09-17）、~~固件升级/值班~~ ✅（值班 M2026-09-18b / 固件升级编排 M2026-09-20）、~~安全基线~~ ✅（M2026-09-19）、~~报表中心~~ ✅（M2026-09-22）、~~PDU 电源~~ ✅（M2026-09-22b）、~~虚机 vCenter 同步~~ ✅（M2026-09-23）、~~资产生命周期+保修/借用~~ ✅（资产生命周期 M2026-09-03d + 借用闭环 M2026-09-09 + 保修到期定时推送 M2026-09-24c）
 **四期**：AI（LLM 网关已留 settings.LLM_*、NL2Query、根因分析、ChatOps 飞书机器人、RAG）
 **技术债**：ai/report 骨架 app 补全；巡检只实现了 2 种检查类型（online 状态/接口错包阈值）；collect_shard 需要真实 SNMP 设备联调；audit_log/log_record/login_event 分区表转换（ER D12）；事件单超时仅时间线提醒（飞书/升级未接）
 
@@ -84,6 +84,7 @@
 | verify_edit.py | 设备位置编辑（换柜/冲突/下架） | 7 PASS |
 | verify_collect.py | 真实采集链路(SNMP/ICMP) | 6 PASS |
 | **verify_ipam.py** | **IPAM：VLAN/Subnet/IP CRUD + usage + 越界拒绝 / ARP 文本导入(新增/保留位→used/冲突/范围外/同 mac) / SNMP ARP 采集演练 mock(登记 .22/.23) 含 interface 回填 / 大网段格子图切片(offset/limit) / 写门(cmdb.device.execute) 负例** | **17 PASS（sqlite 与容器 PG 各一遍）** |
+| **verify_warranty.py** | **保修到期提醒收尾：warranty-expiring 清单口径(days_left) / summary.30 汇总 / warranty-notify dry 触发(汇总+清单+渠道 dry 标记) / dry 幂等无副作用 / net_demo(有 view 无 execute) 触发 403 / 清理后不在清单** | **8 PASS（sqlite 与容器 PG 各一遍）** |
 | verify_ncm.py | NCM 备份/基线 | 8 PASS |
 | verify_syslog.py | Syslog 收流/检索/限流 | PASS |
 | verify_silence_ap.py | 告警静默 + AP 台账同步 | 7 PASS |
@@ -591,6 +592,19 @@
 - **大网段格子图**：`GET /ipam/subnets/{id}/map/?offset=&limit=`（limit≤2048/次）——**整数偏移切片、不物化整段**（/8 也安全），每格带登记状态 + usage 汇总；写门统一 `cmdb.device.execute`（import-arp/arp-poll 负例 403）。
 - **验证**：`scripts/verify_ipam.py` 重写并扩容至 **17 PASS ×2**（sqlite/PG）：P1-P9 基础闭环（含同 mac 不误报）→ P10/P11 权限负例 → P12-P14 mock ARP 采集登记 .22/.23 与重复 poll 幂等 → P15-P17 格子图切片（首/尾窗口、.22 状态、auditor 403）。drift 复核：仅剩既有 dcimticket kind/status 漂移（纪律内不处理），本轮零新增漂移。
 - **待办/坑**：① 大网段前端逐格渲染仍受浏览器 DOM 限制——建议分页窗口滚动虚拟化（后端切片已就绪）；② ARP 采集真实链路需在具备 SNMP 设备环境联调（标准表跨厂商，冲突检测走 mac 变化）；③ 终端定位增强（MAC-IP 学习 × 工位/端口档案、私接检测）见 IA-MENU"终端定位"规划，本轮未做。
+
+---
+
+## 42. 里程碑 M2026-09-24c：保修到期定时推送（生命周期/保修/借用收尾）
+
+- **范围**：§3 三期最后遗留项（资产生命周期+保修/借用）收口。资产状态机/资产事件、借用闭环台账（M2026-09-03d/09-09，占用自动静默联动）此前已交付并保持 12/13 PASS×2；本轮补齐唯一待办——**保修到期定时推送**（PRD 期望 30/60/90/180 提前提醒），把"界面清单"升级为"可推送提醒"。
+- **后端**（apps/cmdb，无新表）：
+  - `warranty.py`（新服务）：`warranty_snapshot(within_days)`（汇总口径与清单，与 GET warranty-expiring 原实现同构并收拢单源）+ `build_message()`（过期/30/60/90/180 计数 + 近 30 天与已过期清单前 20）+ `notify_warranty(dry=False)`（遍历 enabled 通知渠道走 system.services.send_notification 统一出口；单渠道失败不影响其余；dry=True 只回显不实发）。
+  - `views.DeviceViewSet.warranty_expiring` 重构为调用 `warranty_snapshot`（输出不变）；新增 `POST /cmdb/devices/warranty-notify/`（cmdb.device.execute 门禁；body {within_days?, dry?} 默认 dry=1）。
+  - beat `cmdb-warranty-notify` 每日 09:05 → task `cmdb.warranty_notify`（dry=False；无 enabled 渠道返回空不报错）。
+  - `init_nops_data` 补只读演示 persona `op_low`/`viewer_pg`（cmdb/dcim/alert/inspect/monitor 各 view 无 edit/execute；旧 verify_* 默认 NOPS_RO_USER 依赖，随重灌幂等重建）。
+- **验证**：`scripts/verify_warranty.py` **8 PASS ×2**（sqlite/PG）：建 +10 天临保设备 → 30 天清单含本设备(days_left=10)、summary.30 口径 → dry 触发汇总/清单/渠道 dry 标记 → dry 幂等无副作用 → net_demo 只读 GET 200 / notify 403 → 硬删后不在清单。回归 verify_lifecycle 12、verify_loans 13 双通道保持绿。
+- **待办/坑**：① 默认"默认飞书"渠道 enabled=False（webhook 占位）——启用并填 webhook_url 后每日 09:05 自动推送，未配则静默返回；② 提醒只发汇总文本，未做每人订阅（owner 维度逐人）；③ 生命周期强制顺序与 borrow/return×usage 联动细节（如维修中占用互斥）留待流程强化，P1 语义不变。
 
 ---
 

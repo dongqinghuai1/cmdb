@@ -58,6 +58,8 @@ app.conf.beat_schedule = {
     "cmdb-vcenter-sync": {"task": "cmdb.sync_vcenter", "schedule": crontab(minute=25)},
     # IPAM ARP 周期采集（10 分钟一次 → IP 台账登记/冲突/interface 回填）
     "ipam-arp-poll": {"task": "ipam.arp_poll", "schedule": 600.0},
+    # 保修到期提醒推送（每日 09:05，enabled 通知渠道实发）
+    "cmdb-warranty-notify": {"task": "cmdb.warranty_notify", "schedule": crontab(hour=9, minute=5)},
     # PDU/UPS 电源实测（5 分钟一次 → dcim_powersample；无 Prometheus 环境跳过）
     "dcim-power-poll": {"task": "dcim.poll_power", "schedule": 300.0},
     # SNMP 采集（10 分钟一次 → 接口状态/错误；无线 9800 适配待校准）
