@@ -56,8 +56,19 @@
 
 ## 3. 待办清单（按 PRD 路线图）
 
-**二期**：syslog 接收+日志检索、NCM 配置备份/diff、拓扑(~~LLDP 自动发现~~ ✅M2026-09-17；G6 手工布局保存待办)、AP 台账同步、~~告警收敛/静默~~ ✅（占用静默+复燃合并 M2026-09-18 / 根因抑制+变更窗口自动静默 M2026-09-21）、~~IPAM~~ ✅（M2026-09-24：基础台账 M2026-09-0x + ARP 采集收尾）、~~飞书 SSO~~ ✅（M2026-09-23b）、Prometheus remote_write、路由快照采集（~~change_ticket 轻量变更单~~ ✅ 已于三期补齐，见 M2026-09-02c）
+**二期**：syslog 接收+日志检索、NCM 配置备份/diff、拓扑(~~LLDP 自动发现~~ ✅M2026-09-17；G6 手工布局保存待办)、AP 台账同步、~~告警收敛/静默~~ ✅（占用静默+复燃合并 M2026-09-18 / 根因抑制+变更窗口自动静默 M2026-09-21）、~~IPAM~~ ✅（M2026-09-24：基础台账(一期) + ARP 采集/interface 回填/大网段格子图收尾）、~~飞书 SSO~~ ✅（M2026-09-23b）、Prometheus remote_write、路由快照采集（~~change_ticket 轻量变更单~~ ✅ 已于三期补齐，见 M2026-09-02c）
 **三期**：~~自动化运维~~ ✅、~~轻量事件单~~ ✅、~~轻量变更单(二期欠账)~~ ✅、~~线缆与 LLDP 比对~~ ✅（M2026-09-17）、~~固件升级/值班~~ ✅（值班 M2026-09-18b / 固件升级编排 M2026-09-20）、~~安全基线~~ ✅（M2026-09-19）、~~报表中心~~ ✅（M2026-09-22）、~~PDU 电源~~ ✅（M2026-09-22b）、~~虚机 vCenter 同步~~ ✅（M2026-09-23）、~~资产生命周期+保修/借用~~ ✅（资产生命周期 M2026-09-03d + 借用闭环 M2026-09-09 + 保修到期定时推送 M2026-09-24c）
+
+**续作路线图（2026-09-24c 起，用户续点名三块余量）**：
+- **① 资产生命周期/保修/借用收尾 —— ✅ 已完成（M2026-09-24c）**：见上方勾选；新增 `POST /cmdb/devices/warranty-notify/` + beat 每日 09:05 推送（verify_warranty 8 PASS×2）。
+- **② 前端入口补齐 —— 排队（后端均已就绪，逐项最小页面/入口）**：
+  - 报表中心页（/report/snapshots 列表+generate、/report/schedules CRUD+run，接菜单"报表中心"）；
+  - IPAM 大网段格子图分页（>512 主机走 `GET /ipam/subnets/{id}/map/?offset=&limit=` 切片滚动；≤512 维持现有全量格子）；
+  - 虚机来源 badge（Device360 显示 vm_source=vcenter:pk / vm_uuid，M39 后端就绪）；
+  - 飞书登录按钮 + /sso/feishu 回调页（M40 后端就绪；回调拿 code → /auth/feishu/callback/ 换 JWT）；
+  - （可选）系统管理页 FeishuApp 配置与"同步通讯录"入口。
+- **③ 二期其余欠账 —— 排队**：syslog 日志检索增强（检索字段/时间线/导出）、Prometheus remote_write 接入、路由快照采集（RouteTableSnapshot 周期任务 + beat）、拓扑 G6 手工布局保存。
+- 每项交付后在本节勾选 + 文末补里程碑；回归基线口径见 §5（当前全部 verify 行双通道绿，最近收尾 commit `2036294`）。
 **四期**：AI（LLM 网关已留 settings.LLM_*、NL2Query、根因分析、ChatOps 飞书机器人、RAG）
 **技术债**：ai/report 骨架 app 补全；巡检只实现了 2 种检查类型（online 状态/接口错包阈值）；collect_shard 需要真实 SNMP 设备联调；audit_log/log_record/login_event 分区表转换（ER D12）；事件单超时仅时间线提醒（飞书/升级未接）
 
